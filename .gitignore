@@ -1,0 +1,17 @@
+# The venv: torch and its wheels, machine-local and several gigabytes of it.
+.venv/
+__pycache__/
+*.pyc
+
+# What the trainers write. A generator is ~90 MB and a checkpoint ~400 MB; ship those as release
+# assets rather than commits.
+*.onnx
+*.npy
+*.npz
+*.pt
+*.log
+
+# What the tools write to look at.
+*.html
+*.png
+onnxruntime_profile__*.json

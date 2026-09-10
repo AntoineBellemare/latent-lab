@@ -1,0 +1,8 @@
+# Training runs outside goofi and outside its venvs, so torch stays out of the runtime.
+torch
+torchvision
+pillow
+numpy
+# The trainers write `.onnx`; every tool that judges one reads it back.
+onnx
+onnxruntime

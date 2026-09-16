@@ -87,10 +87,17 @@ class Mapping(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, latent, size, ngf, depth=4):
+    def __init__(self, latent, size, ngf, depth=4, classes=0):
         super().__init__()
         self.latent = latent
         self.size = size
+        self.classes = classes
+        if classes:
+            # The category shifts `z` before the mapping, so ONE latent serves every category and a
+            # knob keeps its direction while the material changes under it. Small to start with, so a
+            # run begun from an unconditional parent draws what the parent drew until this earns its say.
+            self.tag = nn.Linear(classes, latent, bias=False)
+            nn.init.normal_(self.tag.weight, 0.0, 0.02)
         self.mapping = Mapping(latent, depth)
         self.stem = nn.Sequential(
             nn.ConvTranspose2d(latent, channels(4, ngf) * 2, 4, 1, 0, bias=False),
@@ -117,8 +124,12 @@ class Generator(nn.Module):
             held[r * 2] = x
         return torch.tanh(self.out(x))
 
-    def forward(self, z):
-        return self.synthesis(self.mapping(z))
+    def steered(self, z, hot):
+        """`z` with its category folded in, which is what the mapping network is given."""
+        return z + self.tag(hot) if self.classes else z
+
+    def forward(self, z, hot=None):
+        return self.synthesis(self.mapping(self.steered(z, hot)))
 
 
 def resolutions(size):
@@ -134,8 +145,9 @@ def excited(size):
 class Discriminator(nn.Module):
     """Down to 8x8 for the verdict, and back up from it for the reconstruction that regularises it."""
 
-    def __init__(self, size, ndf):
+    def __init__(self, size, ndf, classes=0):
         super().__init__()
+        self.classes = classes
         steps = [nn.Conv2d(3, channels(size, ndf), 4, 2, 1, bias=False), nn.LeakyReLU(0.2, True)]
         for r in reversed([r for r in sorted(WIDTH) if 8 < r <= size // 2]):
             steps += [
@@ -145,14 +157,23 @@ class Discriminator(nn.Module):
             ]
         self.down = nn.Sequential(*steps)
         self.verdict = nn.Conv2d(channels(16, ndf), 1, 4, 1, 0, bias=False)
+        if classes:
+            # Projection conditioning. Without it the generator can ignore the category altogether:
+            # a critic that cannot tell which category it is shown cannot punish the wrong one. Zero
+            # to start with, so a warm start's verdict is its parent's until the class earns its say.
+            self.tag = nn.Linear(classes, channels(16, ndf), bias=False)
+            nn.init.zeros_(self.tag.weight)
         self.whole = decoder(channels(16, ndf), ndf)
         self.part = decoder(channels(16, ndf), ndf)
 
-    def forward(self, x):
+    def forward(self, x, hot=None):
         f = self.down(x)
         quarter = random.randint(0, 3)
         half = f[:, :, (quarter // 2) * 4 : (quarter // 2) * 4 + 4, (quarter % 2) * 4 : (quarter % 2) * 4 + 4]
-        return self.verdict(f).flatten(1).mean(1), self.whole(f), self.part(half), quarter
+        spoken = self.verdict(f).flatten(1).mean(1)
+        if self.classes and hot is not None:
+            spoken = spoken + (f.mean((2, 3)) * self.tag(hot)).sum(1)
+        return spoken, self.whole(f), self.part(half), quarter
 
 
 def decoder(inp, ndf):
@@ -212,10 +233,13 @@ class Folder(torch.utils.data.Dataset):
     Held decoded, because a 24-megapixel JPEG takes longer to open than the step it feeds.
     """
 
-    def __init__(self, where, size, detail):
+    def __init__(self, where, size, detail, classes=False):
         files = sorted(p for p in pathlib.Path(where).expanduser().rglob("*") if p.suffix.lower() in SUFFIXES)
         if not files:
             raise SystemExit(f"no images under {where}")
+        # A class is the folder an image sits in, which is what `by_category.py` writes.
+        self.names = sorted({p.parent.name for p in files}) if classes else []
+        self.tags = [self.names.index(p.parent.name) for p in files] if classes else [0] * len(files)
         self.size = size
         side = max(size, round(size * detail))
         self.held = []
@@ -235,7 +259,8 @@ class Folder(torch.utils.data.Dataset):
         crop = held[top : top + self.size, left : left + self.size]
         if random.random() < 0.5:
             crop = crop[:, ::-1]
-        return torch.tensor(np.ascontiguousarray(crop), dtype=torch.float32).permute(2, 0, 1) / 127.5 - 1.0
+        got = torch.tensor(np.ascontiguousarray(crop), dtype=torch.float32).permute(2, 0, 1) / 127.5 - 1.0
+        return got, self.tags[i]
 
 
 def quadrant(x, which):
@@ -243,7 +268,7 @@ def quadrant(x, which):
     return x[:, :, (which // 2) * half : (which // 2) * half + half, (which % 2) * half : (which % 2) * half + half]
 
 
-def r1(dis, real, gamma, every):
+def r1(dis, real, hot, gamma, every):
     """The gradient of the verdict at a real image, penalised.
 
     Nothing else bounds the discriminator's scale — the hinge is scale-sensitive, the verdict head
@@ -252,7 +277,7 @@ def r1(dis, real, gamma, every):
     is left chasing a critic that has stopped learning. That is the failure this run showed twice.
     """
     real = real.detach().requires_grad_(True)
-    (grad,) = torch.autograd.grad(dis(real)[0].sum(), real, create_graph=True)
+    (grad,) = torch.autograd.grad(dis(real, hot)[0].sum(), real, create_graph=True)
     return (gamma / 2) * every * grad.square().sum([1, 2, 3]).mean()
 
 
@@ -287,28 +312,76 @@ class Steered(nn.Module):
         return self.gen.synthesis(self.mean + (z * self.sigma) @ self.basis)
 
 
-def axes_of(gen, latent, device, samples=8192, keep=None):
-    """The principal axes of `w`, by sampling the mapping network the space is reached through."""
+class Blended(nn.Module):
+    """The conditional generator as a patch drives it: a blend of categories, and the axes WITHIN one.
+
+    The mean of `w` moves with the blend while the axes stay shared, so a knob keeps its direction as
+    the material changes under it, and the place between two categories is a place rather than a
+    crossfade of two pictures.
+    """
+
+    def __init__(self, gen, means, basis, sigma):
+        super().__init__()
+        self.gen = gen
+        self.register_buffer("means", means)
+        self.register_buffer("basis", basis)
+        self.register_buffer("sigma", sigma)
+
+    def forward(self, z, category):
+        share = category.clamp_min(0.0)
+        total = share.sum(1, keepdim=True)
+        # A patch that has wired nothing yet sends zeros, which is every category at once rather
+        # than a division by nothing.
+        share = torch.where(total > 0, share / total.clamp_min(1e-6), torch.full_like(share, 1.0 / share.shape[1]))
+        return self.gen.synthesis(share @ self.means + (z * self.sigma) @ self.basis)
+
+
+def axes_of(gen, latent, device, samples=8192, keep=None, classes=0):
+    """The principal axes of `w`, by sampling the mapping network the space is reached through.
+
+    With categories the mean is taken PER category, and the axes come from what is left once each
+    category's own mean is removed. The directions are then within-category variation rather than
+    the switch from one category to the next, which the category input already carries.
+    """
     gen.eval()
     with torch.no_grad():
-        w = torch.cat([gen.mapping(torch.randn(512, latent, device=device)) for _ in range(samples // 512)])
+        if classes:
+            rounds = max(1, samples // (512 * classes))
+            means, centred = [], []
+            for c in range(classes):
+                hot = F.one_hot(torch.full((512,), c, device=device), classes).float()
+                w = torch.cat(
+                    [gen.mapping(gen.steered(torch.randn(512, latent, device=device), hot)) for _ in range(rounds)]
+                )
+                means.append(w.mean(0))
+                centred.append(w - w.mean(0))
+            middle, centred = torch.stack(means), torch.cat(centred)
+        else:
+            w = torch.cat([gen.mapping(torch.randn(512, latent, device=device)) for _ in range(samples // 512)])
+            middle, centred = w.mean(0), w - w.mean(0)
+        u, s, v = torch.linalg.svd(centred, full_matrices=False)
     gen.train()
-    mean = w.mean(0)
-    u, s, v = torch.linalg.svd(w - mean, full_matrices=False)
     keep = keep or latent
     held = (s[:keep] ** 2).sum() / (s**2).sum()
-    return mean, v[:keep].contiguous(), (s[:keep] / (len(w) - 1) ** 0.5).contiguous(), float(held)
+    return middle, v[:keep].contiguous(), (s[:keep] / (len(centred) - 1) ** 0.5).contiguous(), float(held)
 
 
-def export(gen, path, latent, size, device, keep=None):
+def export(gen, path, latent, size, device, keep=None, classes=0):
     """The generator alone, batch one, steered through `w`'s principal axes."""
-    mean, basis, sigma, held = axes_of(gen, latent, device, keep=keep)
-    model = Steered(gen, mean, basis, sigma).eval()
+    middle, basis, sigma, held = axes_of(gen, latent, device, keep=keep, classes=classes)
+    if classes:
+        model = Blended(gen, middle, basis, sigma).eval()
+        given = (torch.zeros(1, basis.shape[0], device=device), torch.zeros(1, classes, device=device))
+        names = ["z", "category"]
+    else:
+        model = Steered(gen, middle, basis, sigma).eval()
+        given = (torch.zeros(1, basis.shape[0], device=device),)
+        names = ["z"]
     torch.onnx.export(
         model,
-        (torch.zeros(1, basis.shape[0], device=device),),
+        given,
         str(path),
-        input_names=["z"],
+        input_names=names,
         output_names=["image"],
         opset_version=17,
         dynamo=False,
@@ -343,6 +416,18 @@ def main():
     ap.add_argument("--ngf", type=int, default=64, help="Generator width. Halve it for a smaller model.")
     ap.add_argument("--ndf", type=int, default=64)
     ap.add_argument("--resume", action="store_true", help="Carry on from the .pt beside --out.")
+    ap.add_argument(
+        "--init",
+        help="Start from another run's weights, with a fresh optimizer and the step count back at "
+        "zero. Children of one parent stay in its basin, so their weights still blend; two cold "
+        "starts order their units differently and average to mush.",
+    )
+    ap.add_argument(
+        "--classes",
+        action="store_true",
+        help="Take each image's category from the folder holding it and condition on it: ONE model "
+        "with a category input a patch can blend, instead of one model per folder.",
+    )
     ap.add_argument("--steps", type=int, default=50000)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--lr", type=float, default=2e-4)
@@ -364,14 +449,26 @@ def main():
     args.r1 = args.r1 or 0.0002 * args.size**2 / args.batch
 
     device = torch.device(args.device)
-    data = Folder(args.images, args.size, args.detail)
+    data = Folder(args.images, args.size, args.detail, args.classes)
+    classes = len(data.names)
     print(f"{len(data)} images under {args.images}, training at {args.size} on {device}, detail {args.detail}")
+    if classes:
+        counts = np.bincount(data.tags, minlength=classes)
+        print("  " + ", ".join(f"{n} {c}" for n, c in zip(data.names, counts)), flush=True)
+    # Drawn evenly, or the largest category is trained on three times as hard as the smallest and the
+    # rare ones arrive underdrawn.
+    sampler = (
+        torch.utils.data.WeightedRandomSampler([1.0 / counts[t] for t in data.tags], len(data), replacement=True)
+        if classes
+        else None
+    )
     loader = torch.utils.data.DataLoader(
-        data, batch_size=args.batch, shuffle=True, num_workers=args.workers, drop_last=True, persistent_workers=args.workers > 0
+        data, batch_size=args.batch, shuffle=sampler is None, sampler=sampler, num_workers=args.workers,
+        drop_last=True, persistent_workers=args.workers > 0
     )
 
-    gen = Generator(args.latent, args.size, args.ngf).to(device)
-    dis = Discriminator(args.size, args.ndf).to(device)
+    gen = Generator(args.latent, args.size, args.ngf, classes=classes).to(device)
+    dis = Discriminator(args.size, args.ndf, classes=classes).to(device)
     print(f"generator {sum(q.numel() for q in gen.parameters()) / 1e6:.1f}M parameters, r1 {args.r1:.2f}")
     # The mapping moves at a hundredth of the synthesis, which is StyleGAN's own remedy and is aimed
     # at exactly what this run measured: left at the same rate it runs away, and `w` ends up with one
@@ -393,6 +490,14 @@ def main():
     path_mean = torch.zeros((), device=device)
     held_path, taken = 0.0, 0
     step, feed = 0, iter(loader)
+    if args.init:
+        was = torch.load(args.init, map_location=device, weights_only=False)
+        for who, key in ((gen, "gen"), (dis, "dis"), (smooth, "smooth")):
+            missing, unused = who.load_state_dict(was[key], strict=False)
+            if missing or unused:
+                print(f"  {key}: {len(missing)} weights are new here, {len(unused)} of its own unused", flush=True)
+        print(f"started from {pathlib.Path(args.init).name}, which had run {was['step']} steps", flush=True)
+
     carry = pathlib.Path(args.out).with_suffix(".pt")
     if args.resume and carry.is_file():
         was = torch.load(carry, map_location=device, weights_only=False)
@@ -405,32 +510,36 @@ def main():
         print(f"carrying on from {carry.name} at step {step}", flush=True)
     while step < args.steps:
         try:
-            real = next(feed).to(device)
+            real, tags = next(feed)
+            real = real.to(device)
         except StopIteration:
             feed = iter(loader)
             continue
-        w = gen.mapping(torch.randn(args.batch, args.latent, device=device))
+        hot = F.one_hot(tags.to(device), classes).float() if classes else None
+        # The generator is asked for categories the way the loader draws them: evenly.
+        drawn = F.one_hot(torch.randint(classes, (args.batch,), device=device), classes).float() if classes else None
+        w = gen.mapping(gen.steered(torch.randn(args.batch, args.latent, device=device), drawn))
         fake = gen.synthesis(w)
 
         shown, faked = augment(real), augment(fake.detach())
-        verdict, whole, part, which = dis(shown)
+        verdict, whole, part, which = dis(shown, hot)
         # Clamped, because `augment` shifts brightness by up to a half and then stretches contrast,
         # so the target leaves the range the decoders' `tanh` can reach at all — an irreducible floor
         # on the one term that is supposed to keep the discriminator's trunk honest.
         small = F.interpolate(shown, size=whole.shape[-1], mode="area").clamp(-1.0, 1.0)
         rebuilt = F.mse_loss(whole, small) + F.mse_loss(part, quadrant(small, which))
-        loss_d = F.relu(1.0 - verdict).mean() + F.relu(1.0 + dis(faked)[0]).mean() + rebuilt
+        loss_d = F.relu(1.0 - verdict).mean() + F.relu(1.0 + dis(faked, drawn)[0]).mean() + rebuilt
         if args.r1 > 0 and step % args.r1_every == 0:
-            loss_d = loss_d + r1(dis, shown, args.r1, args.r1_every)
+            loss_d = loss_d + r1(dis, shown, hot, args.r1, args.r1_every)
         opt_d.zero_grad(set_to_none=True)
         loss_d.backward()
         opt_d.step()
 
-        loss_g = -dis(augment(fake))[0].mean()
+        loss_g = -dis(augment(fake), drawn)[0].mean()
         # Lazily, because the second-order graph is the expensive part and the target it holds is a
         # running average that a fraction of the steps estimates just as well.
         if args.path > 0 and step >= args.path_start and step % args.path_every == 0:
-            w = gen.mapping(torch.randn(args.batch, args.latent, device=device)).requires_grad_(True)
+            w = gen.mapping(gen.steered(torch.randn(args.batch, args.latent, device=device), drawn)).requires_grad_(True)
             penalty, length = path_length(gen, w, gen.synthesis(w), path_mean)
             # An exact running mean until the exponential one would be slower.
             taken += 1
@@ -462,24 +571,29 @@ def main():
             )
         if step and step % args.snap == 0:
             preview(smooth, args, device, step)
-            where, keep, held = export(smooth, args.out, args.latent, args.size, device, args.keep)
+            where, keep, held = export(smooth, args.out, args.latent, args.size, device, args.keep, classes)
             # Both, always. Weight averaging can blur a generator into something that reads exactly
             # like mode collapse, and telling the two apart afterwards needs the unaveraged one too.
             raw = pathlib.Path(args.out).with_name(pathlib.Path(args.out).stem + "-raw.onnx")
-            export(gen, raw, args.latent, args.size, device, args.keep)
+            export(gen, raw, args.latent, args.size, device, args.keep, classes)
             print(f"  exported {where} and {raw.name}: {keep} axes holding {held:.1%} of w", flush=True)
             stash(carry, step, gen, dis, smooth, opt_g, opt_d, path_mean, taken)
         step += 1
 
     preview(smooth, args, device, step)
-    where, keep, held = export(smooth, args.out, args.latent, args.size, device, args.keep)
+    where, keep, held = export(smooth, args.out, args.latent, args.size, device, args.keep, classes)
+    # The last snapshot's checkpoint is thousands of steps behind this export. Stash again, so the
+    # `.pt` holds the weights the `.onnx` was written from and a blend of two runs blends what was measured.
+    stash(carry, step, gen, dis, smooth, opt_g, opt_d, path_mean, taken)
     print(f"wrote {where}: {keep} axes holding {held:.1%} of the variance in w")
 
 
 def preview(gen, args, device, step=0):
     gen.eval()
     with torch.no_grad():
-        got = gen(torch.randn(4, args.latent, device=device))
+        z = torch.randn(4, args.latent, device=device)
+        hot = F.one_hot(torch.arange(4, device=device) % gen.classes, gen.classes).float() if gen.classes else None
+        got = gen(z, hot)
     gen.train()
     tiled = got.permute(0, 2, 3, 1).reshape(-1, args.size, 3).cpu().numpy()
     # Numbered, so a run's trajectory stays readable instead of being overwritten by its own end.

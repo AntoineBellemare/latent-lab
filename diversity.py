@@ -27,13 +27,41 @@ def open_model(path):
     return session, next(int(d) for d in reversed(shape) if isinstance(d, int) and d > 1)
 
 
-def drawn(session, width, n, seed=0):
+def wants(session):
+    """Every input a model asks for: the latent first, then a category vector if it is conditional."""
+    return [
+        (q.name, next((int(d) for d in reversed(q.shape) if isinstance(d, int) and d > 1), 1))
+        for q in session.get_inputs()
+    ]
+
+
+def feed(session, z, category=None):
+    """What to hand the model: the latent, and for a conditional one the category to draw it in.
+
+    `None` is an even blend of every category, which is the honest answer for a model asked to draw
+    without being told what — and is what the exported graph does with a patch that has wired nothing.
+    """
+    given = {session.get_inputs()[0].name: np.asarray(z, np.float32)[None]}
+    for name, k in wants(session)[1:]:
+        hot = np.full((1, k), 1.0 / k, np.float32)
+        if category is not None:
+            hot[:] = 0.0
+            hot[0, int(category) % k] = 1.0
+        given[name] = hot
+    return given
+
+
+def drawn(session, width, n, seed=0, category=None):
     rng = np.random.default_rng(seed)
+    extra = wants(session)[1:]
     out = []
     for _ in range(n):
         z = rng.standard_normal(width).astype(np.float32)
         z *= np.sqrt(width) / (np.linalg.norm(z) + 1e-6)
-        got = session.run(None, {session.get_inputs()[0].name: z[None]})[0]
+        # A conditional model is measured the way it is played: one category at a time, never the
+        # mush of all of them at once.
+        pick = category if category is not None or not extra else rng.integers(extra[0][1])
+        got = session.run(None, feed(session, z, pick))[0]
         a = np.asarray(got, dtype=np.float32)
         a = a[0] if a.ndim == 4 else a
         if a.shape[0] <= 4:
@@ -113,10 +141,11 @@ def main():
     ap.add_argument("--draws", type=int, default=24)
     ap.add_argument("--reals", type=int, default=96, help="Reference crops, fixed: a reference resampled with the model swings every ratio on its own.")
     ap.add_argument("--detail", type=float, default=3.0)
+    ap.add_argument("--category", type=int, help="Hold one category, for a conditional model.")
     args = ap.parse_args()
 
     session, width = open_model(args.model)
-    fake = drawn(session, width, args.draws)
+    fake = drawn(session, width, args.draws, category=args.category)
     size = fake.shape[1]
     true = real(args.images, size, args.reals, args.detail)
 

@@ -17,6 +17,8 @@ import onnx
 import onnxruntime
 from onnx import numpy_helper
 
+from diversity import feed
+
 PROVIDERS = ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"]
 
 
@@ -29,8 +31,8 @@ def baked(path):
     return None
 
 
-def draw(session, name, z, span):
-    got = session.run(None, {name: np.asarray(z, np.float32)[None]})[0]
+def draw(session, z, span, category=None):
+    got = session.run(None, feed(session, z, category))[0]
     a = np.asarray(got, dtype=np.float32)
     a = a[0] if a.ndim == 4 else a
     if a.shape[0] <= 4:
@@ -46,17 +48,17 @@ def main():
     ap.add_argument("--push", type=float, default=2.0, help="How far to turn each, in sigma.")
     ap.add_argument("--bases", type=int, default=4, help="Places in the space to average the effect over.")
     ap.add_argument("--floor", type=float, default=0.02, help="Mean pixel move that counts as visible.")
+    ap.add_argument("--category", type=int, help="For a conditional model, hold this category while the axes are turned.")
     args = ap.parse_args()
 
     ready = onnxruntime.get_available_providers()
     session = onnxruntime.InferenceSession(args.model, providers=[q for q in PROVIDERS if q in ready])
-    name = session.get_inputs()[0].name
     shape = session.get_inputs()[0].shape
     width = next(int(d) for d in reversed(shape) if isinstance(d, int) and d > 1)
     keep = min(args.axes, width)
 
     sigma = baked(args.model)
-    middle = draw(session, name, np.zeros(width), args.range)
+    middle = draw(session, np.zeros(width), args.range, args.category)
 
     # Averaged over several places in the space, not only its centre. Measured at the mean alone the
     # count swung between six and twenty-four across consecutive snapshots of one run: that is one
@@ -69,7 +71,7 @@ def main():
         for base in bases:
             lo, hi = base.copy(), base.copy()
             lo[k], hi[k] = base[k] - args.push, base[k] + args.push
-            felt.append(np.abs(draw(session, name, hi, args.range) - draw(session, name, lo, args.range)).mean())
+            felt.append(np.abs(draw(session, hi, args.range, args.category) - draw(session, lo, args.range, args.category)).mean())
         moves.append(float(np.mean(felt)))
     moves = np.array(moves)
 

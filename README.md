@@ -98,6 +98,36 @@ powers, a Kuramoto order parameter, a Reduce of anything — and each wired numb
 of its own through the latent space. `spread` is the truncation knob: below 1 is safer and duller.
 `smooth` is what turns a jumpy signal into a walk.
 
+### One model per category, or one model conditioned on it
+
+Two ways to build a space over the categories, and neither is a separate GAN per folder: latent
+spaces of independently trained models have nothing to do with one another, so there is no path
+between them, only a crossfade.
+
+```bash
+# a child per category, every one from the SAME parent
+python fastgan.py --images set-by-category/cat1 --out cat1.onnx --init parent.pt --steps 5500
+python blend.py --models cat1.pt cat4.pt --weights 0.5 0.5 --out between.onnx
+
+# or one model that takes the category as an input a patch can blend
+python fastgan.py --images set-by-category --classes --out conditional.onnx --init parent.pt
+```
+
+`--init` takes another run's weights with a fresh optimizer and the step count back at zero. Children
+of one parent stay in its basin and their weights still average, which is what `blend.py` relies on
+and the same reason a model soup works and two cold starts do not. Keep the fine-tunes short: the
+further a child travels, the rougher the road back to its siblings.
+
+`--classes` takes each image's category from the folder that holds it and conditions one model on it.
+The discriminator is conditioned too, by projection — a critic that cannot tell which category it is
+being shown cannot punish the wrong one, and the generator will simply ignore the label. Categories
+are drawn evenly whatever their sizes, or the largest is trained on three times as hard as the
+smallest. The export then takes `z` AND `category`: per-category means that move with the blend, and
+axes shared across all of them, so a knob keeps its direction while the material changes under it.
+Both tags start near silent, so a run begun from an unconditional parent draws what the parent drew
+until the category earns its say. In goofi it is the `Onnx` node, with a slow signal on `category`
+and fast ones on `z`.
+
 It exports every `--snap` steps, so the `.onnx` is loadable while training continues, and writes a
 `.pt` beside it that `--resume` carries on from. Watch the `.png`, and run `keep_best.py` alongside:
 **a GAN wanders, and the export is overwritten every snapshot.** One 120,000-step run here peaked at
@@ -127,6 +157,33 @@ Exactly invertible, exactly smooth, instant. Worth knowing its ceiling — after
 components the principal components of natural images become a Fourier basis, so you get about
 fifteen real axes and then sinusoids. It is the honest baseline a GAN has to beat, and a usable
 soft-colour-field instrument in its own right.
+
+## categories.py — what is this set actually made of?
+
+```bash
+python categories.py --images ~/pictures/set --out ~/pictures/set-categories
+python by_category.py --images ~/pictures/set --csv ~/pictures/set-categories/categories.csv --out ~/pictures/set-by-category
+```
+
+Embeds every image twice — CLIP, which learnt what a surface is CALLED, and DINOv2, which learnt
+what one LOOKS like and never saw a word — then tries every count of groups and scores each on three
+things: are the groups apart (silhouette), do runs from different starts find the same groups
+(stability), and do the two models find the SAME groups (agreement). The third is the one that
+matters. A split two representations with nothing in common both reproduce is in the pictures rather
+than in either model.
+
+Expect low silhouettes on photographs, around 0.15, and do not read that as failure: a set of
+textures is a continuum, and these are regions of it rather than islands. Agreement and stability
+still tell you where to cut it. On 2,133 of one archive the answer was seven — water, rock, waves,
+encrusted rock, peeling paint, bark, abstract light — holding 155 to 482 images each.
+
+Check two things before trusting a category. That it is a MATERIAL and not one afternoon's shooting:
+count the distinct shoots behind it, because a category that is one session will be memorised rather
+than learnt. And that DINOv2 agreed: a category CLIP names confidently but DINOv2 does not see is a
+word, not a look.
+
+`by_category.py` turns the CSV into one folder per category as hardlinks — no second copy of the
+set — which is what `--init`, `--classes` and every measuring tool here read.
 
 ## cluster.py
 
@@ -198,6 +255,27 @@ of its own, so a second pass cannot clobber what a first one found.
 **Score everything you care about.** The first version of this weighed colour alone, and duly picked
 a snapshot that matched the palette almost exactly and carried less than half the data's detail.
 Sharpness is in the score now. A selector is only as good as the worst thing it is blind to.
+
+### sheet.py — eighteen draws over the real thing
+
+```bash
+python sheet.py --model textures.onnx --images ~/pictures/set --out sheet.png
+python sheet.py --model conditional.onnx --out each.png --each
+```
+
+Four preview tiles is how three faults here went unnoticed. Eighteen draws above eighteen real crops
+catches all of them at a glance, and `--each` gives a conditional model one row per category, which
+is the only way to see whether the category input does anything at all.
+
+### morph.py — is the crossing between two categories even?
+
+```bash
+python morph.py --model conditional.onnx --all --out morph.png
+```
+
+Walks the category vector from one to another with the latent held still, and reports the spread of
+the distance between consecutive frames. A morph that holds still for half its length and then jumps
+is not a control surface, whatever its two ends look like.
 
 ### play.py — a browser, some knobs, the live model
 

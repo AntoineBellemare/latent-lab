@@ -111,6 +111,11 @@ color:var(--faint);margin:0 0 8px;font-weight:500}
       </div>
       <div class="knob"><span>A &rarr; B</span><input type="range" id="mix" min="0" max="1" step="0.004" value="0"><output id="mixv">0.00</output></div>
     </div>
+    <div id="catbox" hidden>
+      <h2>category</h2>
+      <div class="row" id="catbtns"></div>
+      <div id="catknobs"></div>
+    </div>
     <div>
       <h2>global</h2>
       <div class="knob"><span>spread</span><input type="range" id="spread" min="0" max="2" step="0.02" value="1"><output id="spreadv">1.00</output></div>
@@ -124,7 +129,8 @@ color:var(--faint);margin:0 0 8px;font-weight:500}
 <div class="knobs" id="knobs"></div>
 </div>
 <script>
-const WIDTH = __WIDTH__, SHOWN = Math.min(WIDTH, 24);
+const WIDTH = __WIDTH__, SHOWN = Math.min(WIDTH, 24), CLASSES = __CLASSES__;
+const cat = new Float32Array(CLASSES);
 const z = new Float32Array(WIDTH);
 let xa = 0, ya = 1, busy = false, pending = false, walking = false, t0 = 0;
 const img = document.getElementById('img'), view = document.getElementById('view');
@@ -137,7 +143,8 @@ function render() {
   busy = true; pending = false; view.classList.add('busy');
   t0 = performance.now();
   const q = '/frame?spread=' + document.getElementById('spread').value +
-            '&z=' + Array.from(z, v => v.toFixed(3)).join(',');
+            '&z=' + Array.from(z, v => v.toFixed(3)).join(',') +
+            (CLASSES ? '&cat=' + Array.from(cat, v => v.toFixed(3)).join(',') : '');
   const next = new Image();
   next.onload = () => {
     img.src = next.src; busy = false; view.classList.remove('busy');
@@ -275,6 +282,37 @@ function cycle() {
   setTimeout(cycle, 40);
 }
 
+// One weight per category, so a blend is a place rather than a switch. The buttons are the corners.
+if (CLASSES) {
+  cat[0] = 1;
+  document.getElementById('catbox').hidden = false;
+  const btns = document.getElementById('catbtns'), rows = document.getElementById('catknobs');
+  for (let c = 0; c < CLASSES; c++) {
+    const b = document.createElement('button');
+    b.textContent = c;
+    b.title = 'category ' + c + ' alone';
+    b.onclick = () => { cat.fill(0); cat[c] = 1; syncCats(); render(); };
+    btns.appendChild(b);
+    const d = document.createElement('div');
+    d.className = 'knob';
+    d.innerHTML = '<span>cat ' + c + '</span><input type="range" id="c' + c +
+      '" min="0" max="1" step="0.01" value="' + (c ? 0 : 1) + '"><output id="co' + c + '">' +
+      (c ? '0.00' : '1.00') + '</output>';
+    rows.appendChild(d);
+    d.querySelector('input').addEventListener('input', e => {
+      cat[c] = +e.target.value;
+      document.getElementById('co' + c).textContent = cat[c].toFixed(2);
+      render();
+    });
+  }
+}
+function syncCats() {
+  for (let c = 0; c < CLASSES; c++) {
+    const el = document.getElementById('c' + c);
+    if (el) { el.value = cat[c]; document.getElementById('co' + c).textContent = cat[c].toFixed(2); }
+  }
+}
+
 sync(); render();
 </script></body></html>
 """
@@ -289,13 +327,24 @@ class Model:
         self.name = self.session.get_inputs()[0].name
         shape = self.session.get_inputs()[0].shape
         self.width = next(int(d) for d in reversed(shape) if isinstance(d, int) and d > 1)
+        # A conditional model asks for a category too, and the page grows a weight per category.
+        extra = self.session.get_inputs()[1:]
+        self.tag = extra[0].name if extra else None
+        self.classes = (
+            next((int(d) for d in reversed(extra[0].shape) if isinstance(d, int) and d > 1), 0) if extra else 0
+        )
         self.span = span
         self.lock = threading.Lock()
         self.size = self.frame(np.zeros(self.width, np.float32))[1]
 
-    def frame(self, z):
+    def frame(self, z, share=None):
+        given = {self.name: z[None]}
+        if self.tag:
+            given[self.tag] = (
+                np.full((1, self.classes), 1.0 / self.classes, np.float32) if share is None else share[None]
+            )
         with self.lock:
-            got = self.session.run(None, {self.name: z[None]})[0]
+            got = self.session.run(None, given)[0]
         a = np.asarray(got, dtype=np.float32)
         a = a[0] if a.ndim == 4 else a
         if a.shape[0] <= 4:
@@ -326,6 +375,7 @@ def serve(model, port, quality):
                     .replace("__WIDTH__", str(model.width))
                     .replace("__SIZE__", str(model.size))
                     .replace("__PROVIDER__", model.session.get_providers()[0].replace("ExecutionProvider", ""))
+                    .replace("__CLASSES__", str(model.classes))
                 )
                 return self.send(page.encode(), "text/html; charset=utf-8")
             if url.path != "/frame":
@@ -337,14 +387,20 @@ def serve(model, port, quality):
             given = [float(v) for v in q.get("z", [""])[0].split(",") if v]
             z[: min(len(given), model.width)] = given[: model.width]
             z *= float(q.get("spread", ["1"])[0])
-            frame, _ = model.frame(z)
+            share = None
+            if model.classes:
+                weights = [float(v) for v in q.get("cat", [""])[0].split(",") if v]
+                share = np.zeros(model.classes, np.float32)
+                share[: min(len(weights), model.classes)] = weights[: model.classes]
+            frame, _ = model.frame(z, share)
             buf = io.BytesIO()
             Image.fromarray((frame * 255).astype(np.uint8)).save(buf, format="JPEG", quality=quality)
             self.send(buf.getvalue(), "image/jpeg")
 
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"  {model.path}")
-    print(f"  {model.width} axes, {model.size} square, {model.session.get_providers()[0]}")
+    print(f"  {model.width} axes, {model.size} square, {model.session.get_providers()[0]}"
+          + (f", {model.classes} categories" if model.classes else ""))
     print(f"\n  http://127.0.0.1:{port}\n\n  ctrl-c to stop")
     server.serve_forever()
 

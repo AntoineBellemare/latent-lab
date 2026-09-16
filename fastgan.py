@@ -434,6 +434,15 @@ def main():
     ap.add_argument("--r1", type=float, default=0.0, help="R1 gradient penalty on real images; 0 picks one from the resolution.")
     ap.add_argument("--r1-every", type=int, default=16, help="Steps between R1 penalties.")
     ap.add_argument("--mapping-lr", type=float, default=0.01, help="The mapping network's share of the learning rate.")
+    ap.add_argument(
+        "--tag-lr",
+        type=float,
+        default=1.0,
+        help="The category embeddings' multiple of the learning rate. Both start near silent so a "
+        "warm start draws what its parent drew, and at 1.0 they can stay that way: one run left "
+        "three similar categories merged after 42,000 steps while a probe on the same crops told "
+        "them apart nine times in ten.",
+    )
     ap.add_argument("--ema", type=float, default=0.999, help="How much of the averaged generator to keep each step.")
     ap.add_argument("--path", type=float, default=0.5, help="Path length weight: 0 turns it off.")
     ap.add_argument("--path-every", type=int, default=8, help="Steps between path length penalties.")
@@ -474,13 +483,25 @@ def main():
     # at exactly what this run measured: left at the same rate it runs away, and `w` ends up with one
     # direction holding most of its variance — a latent with three usable knobs instead of thirty.
     slow = [q for n, q in gen.named_parameters() if n.startswith("mapping.")]
-    rest = [q for n, q in gen.named_parameters() if not n.startswith("mapping.")]
+    quick = [q for n, q in gen.named_parameters() if n.startswith("tag.")]
+    rest = [q for n, q in gen.named_parameters() if not n.startswith(("mapping.", "tag."))]
     opt_g = torch.optim.Adam(
-        [{"params": slow, "lr": args.lr * args.mapping_lr}, {"params": rest}],
+        [
+            {"params": slow, "lr": args.lr * args.mapping_lr},
+            {"params": quick, "lr": args.lr * args.tag_lr},
+            {"params": rest},
+        ],
         lr=args.lr,
         betas=(0.5, 0.999),
     )
-    opt_d = torch.optim.Adam(dis.parameters(), lr=args.lr, betas=(0.5, 0.999))
+    opt_d = torch.optim.Adam(
+        [
+            {"params": [q for n, q in dis.named_parameters() if n.startswith("tag.")], "lr": args.lr * args.tag_lr},
+            {"params": [q for n, q in dis.named_parameters() if not n.startswith("tag.")]},
+        ],
+        lr=args.lr,
+        betas=(0.5, 0.999),
+    )
 
     # Sampled and exported from an average of the recent weights, never the just-stepped ones: at
     # batch 8 a single adversarial step is noisy enough to make a good run look like a bad one.
@@ -504,8 +525,13 @@ def main():
         gen.load_state_dict(was["gen"])
         dis.load_state_dict(was["dis"])
         smooth.load_state_dict(was["smooth"])
-        opt_g.load_state_dict(was["opt_g"])
-        opt_d.load_state_dict(was["opt_d"])
+        try:
+            opt_g.load_state_dict(was["opt_g"])
+            opt_d.load_state_dict(was["opt_d"])
+        except ValueError as e:
+            # A flag that regroups the parameters — `--tag-lr` does — leaves the saved moments
+            # unfittable. Rebuilding them costs a few hundred steps; refusing to resume costs the run.
+            print(f"  the saved optimizer does not fit this run ({e}); its moments start fresh", flush=True)
         path_mean, taken, step = was["path_mean"], was["taken"], was["step"]
         print(f"carrying on from {carry.name} at step {step}", flush=True)
     while step < args.steps:

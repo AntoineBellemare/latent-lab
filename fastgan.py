@@ -532,6 +532,12 @@ def main():
             # A flag that regroups the parameters — `--tag-lr` does — leaves the saved moments
             # unfittable. Rebuilding them costs a few hundred steps; refusing to resume costs the run.
             print(f"  the saved optimizer does not fit this run ({e}); its moments start fresh", flush=True)
+        # Torch restores each group's rate from the checkpoint, so a resume would quietly train at the
+        # rates the LAST run was given. The flags on THIS run decide them.
+        for group, rate in zip(opt_g.param_groups, [args.lr * args.mapping_lr, args.lr * args.tag_lr, args.lr]):
+            group["lr"] = rate
+        for group, rate in zip(opt_d.param_groups, [args.lr * args.tag_lr, args.lr]):
+            group["lr"] = rate
         path_mean, taken, step = was["path_mean"], was["taken"], was["step"]
         print(f"carrying on from {carry.name} at step {step}", flush=True)
     while step < args.steps:

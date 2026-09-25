@@ -6,3 +6,7 @@ numpy
 # The trainers write `.onnx`; every tool that judges one reads it back.
 onnx
 onnxruntime
+# The diffusion side, `lora.py` and `ip_space.py`, and nothing else.
+diffusers
+transformers
+peft

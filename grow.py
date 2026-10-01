@@ -18,9 +18,10 @@ import argparse
 import re
 
 import torch
+import torch.nn.functional as F
 
 from blend import shape_of
-from fastgan import Discriminator, Generator, excited, resolutions
+from fastgan import Discriminator, Generator
 
 
 def carry(target, given):
@@ -52,21 +53,6 @@ def shifted(critic, by):
     return out
 
 
-def below(gen, w, size):
-    """The feature map a generator holds at `size`, just before it would draw."""
-    x = gen.stem(w.reshape(-1, gen.latent, 1, 1))
-    held = {4: x}
-    for r, step in zip(resolutions(gen.size), gen.steps):
-        if r >= size:
-            break
-        x = step(x)
-        small = r * 2 // 16
-        if small in held:
-            x = gen.excites[excited(gen.size).index(small)](held[small], x)
-        held[r * 2] = x
-    return x
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--from", dest="source", required=True, help="A trained `.pt`.")
@@ -81,26 +67,32 @@ def main():
     ndf = was["dis"]["verdict.weight"].shape[1] // 4
     grown = size * 2
 
-    gen = Generator(latent, grown, ngf, classes=classes)
-    smooth = Generator(latent, grown, ngf, classes=classes)
+    gen = Generator(latent, grown, ngf, classes=classes, fade=True)
+    smooth = Generator(latent, grown, ngf, classes=classes, fade=True)
     dis = Discriminator(grown, ndf, classes=classes)
     by = len(dis.down) - len(Discriminator(size, ndf, classes=classes).down)
 
     kept_g, fresh_g = carry(gen, was["gen"])
     carry(smooth, was["smooth"])
     kept_d, fresh_d = carry(dis, shifted(was["dis"], by))
+    # The old output head, kept so the grown model can start as the old one and blend away from it.
+    with torch.no_grad():
+        gen.older.weight.copy_(was["gen"]["out.weight"])
+        smooth.older.weight.copy_(was["smooth"]["out.weight"])
 
-    # The proof the carry is exact: below the old resolution the grown generator must draw exactly
-    # what the old one did. Anything but zero means a layer landed in the wrong place.
+    # The proof the carry is exact: at alpha zero the grown generator must draw precisely what the
+    # old one drew, upsampled. Anything but zero means a layer landed in the wrong place, and the
+    # run would spend its first hours unlearning the mistake.
     old = Generator(latent, size, ngf, classes=classes).eval()
     old.load_state_dict(was["gen"])
     gen.eval()
     with torch.no_grad():
         w = torch.randn(3, latent)
-        drift = float((below(old, w, size) - below(gen, w, size)).abs().max())
+        was_drawn = F.interpolate(old.synthesis(w), scale_factor=2, mode="bilinear", align_corners=False)
+        drift = float((was_drawn - gen.synthesis(w)).abs().max())
     gen.train()
     if drift > 1e-5:
-        raise SystemExit(f"the grown generator does not reproduce the old one below {size}: off by {drift}")
+        raise SystemExit(f"the grown generator does not reproduce the old one at alpha zero: off by {drift}")
 
     torch.save(
         {
@@ -116,9 +108,10 @@ def main():
         args.out,
     )
     print(f"  {size} -> {grown}, {classes} categories")
-    print(f"  generator: {kept_g} carried, {len(fresh_g)} fresh ({', '.join(sorted({k.split('.')[0] + '.' + k.split('.')[1] for k in fresh_g}))})")
+    named = sorted({".".join(k.split(".")[:2]) for k in fresh_g})
+    print(f"  generator: {kept_g} carried, {len(fresh_g)} fresh ({', '.join(named)})")
     print(f"  critic:    {kept_d} carried, {len(fresh_d)} fresh, blocks shifted by {by}")
-    print(f"  below {size} the grown generator matches the old one to {drift:.1e}")
+    print(f"  at alpha zero it draws the old model upsampled, to {drift:.1e}")
     print(f"  wrote {args.out}")
 
 

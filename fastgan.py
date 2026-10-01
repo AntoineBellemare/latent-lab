@@ -87,11 +87,18 @@ class Mapping(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, latent, size, ngf, depth=4, classes=0):
+    def __init__(self, latent, size, ngf, depth=4, classes=0, fade=False):
         super().__init__()
         self.latent = latent
         self.size = size
         self.classes = classes
+        # Grown from a smaller model: keep its output head and blend away from it. The new layers
+        # start random, and without this the first thousands of steps go on training their noise back
+        # out — which reads as a hatching laid over everything the old model already drew well.
+        self.fading = fade
+        if fade:
+            self.older = nn.Conv2d(channels(size // 2, ngf), 3, 3, 1, 1, bias=False)
+            self.register_buffer("alpha", torch.zeros(()))
         if classes:
             # The category shifts `z` before the mapping, so ONE latent serves every category and a
             # knob keeps its direction while the material changes under it. Small to start with, so a
@@ -116,13 +123,21 @@ class Generator(nn.Module):
     def synthesis(self, w):
         x = self.stem(w.reshape(-1, self.latent, 1, 1))
         held = {4: x}
+        prior = None
         for r, step in zip(resolutions(self.size), self.steps):
+            if self.fading and r == self.size // 2:
+                prior = torch.tanh(self.older(x))
             x = step(x)
             small = r * 2 // 16
             if small in held:
                 x = self.excites[excited(self.size).index(small)](held[small], x)
             held[r * 2] = x
-        return torch.tanh(self.out(x))
+        drawn = torch.tanh(self.out(x))
+        if prior is None:
+            return drawn
+        # At alpha zero this is the old model exactly, upsampled; at one it is the new layers alone.
+        grown = F.interpolate(prior, scale_factor=2, mode="bilinear", align_corners=False)
+        return grown + (drawn - grown) * self.alpha
 
     def steered(self, z, hot):
         """`z` with its category folded in, which is what the mapping network is given."""
@@ -423,6 +438,13 @@ def main():
         "starts order their units differently and average to mush.",
     )
     ap.add_argument(
+        "--fade",
+        type=int,
+        default=0,
+        help="Steps to blend a grown model away from the output head it was grown from. Needs a "
+        "checkpoint from `grow.py`; 0 is an ordinary run.",
+    )
+    ap.add_argument(
         "--classes",
         action="store_true",
         help="Take each image's category from the folder holding it and condition on it: ONE model "
@@ -476,9 +498,12 @@ def main():
         drop_last=True, persistent_workers=args.workers > 0
     )
 
-    gen = Generator(args.latent, args.size, args.ngf, classes=classes).to(device)
+    gen = Generator(args.latent, args.size, args.ngf, classes=classes, fade=args.fade > 0).to(device)
     dis = Discriminator(args.size, args.ndf, classes=classes).to(device)
-    print(f"generator {sum(q.numel() for q in gen.parameters()) / 1e6:.1f}M parameters, r1 {args.r1:.2f}")
+    print(
+        f"generator {sum(q.numel() for q in gen.parameters()) / 1e6:.1f}M parameters, r1 {args.r1:.2f}"
+        + (f", fading off its old head over {args.fade} steps" if args.fade else "")
+    )
     # The mapping moves at a hundredth of the synthesis, which is StyleGAN's own remedy and is aimed
     # at exactly what this run measured: left at the same rate it runs away, and `w` ends up with one
     # direction holding most of its variance — a latent with three usable knobs instead of thirty.
@@ -588,6 +613,9 @@ def main():
         # Ramped, and that ramp is not optional. At a flat 0.999 the average covers a thousand steps
         # of a generator that is still changing fast, and the blur and lost variance that produces
         # read exactly like mode collapse: measured 0.17 of the data's spread against 0.78 without it.
+        if args.fade:
+            # Ramped on the live generator; `smooth` takes it with the rest of the buffers below.
+            gen.alpha.fill_(min(1.0, (step + 1) / args.fade))
         beta = min(args.ema, (1.0 + step) / (10.0 + step))
         with torch.no_grad():
             for a, b in zip(smooth.parameters(), gen.parameters()):

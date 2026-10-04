@@ -118,6 +118,24 @@ class Caption:
         return self.template.format(name=self.named.get(folder, folder), trigger=self.trigger)
 
 
+def keep(pipe, unet, where):
+    """The LoRA as it stands, into `where`.
+
+    The imports are here rather than at the top for the reason the rest of this file keeps them in
+    `main`: diffusers and peft cost seconds to import, and nothing that only reads `--help` should pay.
+    """
+    from diffusers.utils import convert_state_dict_to_diffusers
+    from peft.utils import get_peft_model_state_dict
+
+    out = pathlib.Path(where)
+    out.mkdir(parents=True, exist_ok=True)
+    pipe.__class__.save_lora_weights(
+        save_directory=str(out),
+        unet_lora_layers=convert_state_dict_to_diffusers(get_peft_model_state_dict(unet)),
+    )
+    return out
+
+
 def names_of(pairs):
     out = {}
     for pair in pairs:
@@ -150,6 +168,7 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--workers", type=int, default=4, help="Processes decoding crops while the GPU trains.")
     ap.add_argument("--report", type=int, default=100)
+    ap.add_argument("--save-every", type=int, default=1000, help="Write the LoRA this often; 0 only at the end.")
     ap.add_argument("--sample-steps", type=int, default=2, help="Denoising steps for the sheet it draws at the end.")
     ap.add_argument("--guidance", type=float, default=0.0, help="Guidance for the sheet: 0 for turbo bases, ~5 otherwise.")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -239,13 +258,13 @@ def main():
         optimiser.step()
         if step % args.report == 0 or step == args.steps - 1:
             print(f"step {step:>6}  loss {loss.item():.5f}", flush=True)
+        # Written as it goes, not only at the end: hours of training that a stopped shell can take
+        # with it is a run that has to be done twice.
+        if args.save_every and step and step % args.save_every == 0:
+            keep(pipe, unet, args.out)
+            print(f"  saved at step {step}", flush=True)
 
-    out = pathlib.Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-    pipe.__class__.save_lora_weights(
-        save_directory=str(out),
-        unet_lora_layers=convert_state_dict_to_diffusers(get_peft_model_state_dict(unet)),
-    )
+    out = keep(pipe, unet, args.out)
     prompts = {key or "(all)": caption_of(stream.groups[key][0]) for key in stream.keys}
     # What was trained and how to ask for it, so a sampler does not have to be told again.
     (out / "latent-lab.json").write_text(

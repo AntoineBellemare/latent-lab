@@ -118,8 +118,12 @@ class Caption:
         return self.template.format(name=self.named.get(folder, folder), trigger=self.trigger)
 
 
-def keep(pipe, unet, where):
-    """The LoRA as it stands, into `where`.
+def keep(pipe, unet, where, step=None):
+    """The LoRA as it stands, into `where`, or into `where/step-N` when a step is given.
+
+    Numbered, because a run that diverges late would otherwise overwrite every good weight it wrote
+    earlier with the broken ones — which is how one 14,000-step run came back as pure noise with
+    nothing left to fall back to.
 
     The imports are here rather than at the top for the reason the rest of this file keeps them in
     `main`: diffusers and peft cost seconds to import, and nothing that only reads `--help` should pay.
@@ -127,7 +131,7 @@ def keep(pipe, unet, where):
     from diffusers.utils import convert_state_dict_to_diffusers
     from peft.utils import get_peft_model_state_dict
 
-    out = pathlib.Path(where)
+    out = pathlib.Path(where) if step is None else pathlib.Path(where) / f"step-{step:06d}"
     out.mkdir(parents=True, exist_ok=True)
     pipe.__class__.save_lora_weights(
         save_directory=str(out),
@@ -261,8 +265,8 @@ def main():
         # Written as it goes, not only at the end: hours of training that a stopped shell can take
         # with it is a run that has to be done twice.
         if args.save_every and step and step % args.save_every == 0:
-            keep(pipe, unet, args.out)
-            print(f"  saved at step {step}", flush=True)
+            keep(pipe, unet, args.out, step)
+            print(f"  saved step-{step:06d}", flush=True)
 
     out = keep(pipe, unet, args.out)
     prompts = {key or "(all)": caption_of(stream.groups[key][0]) for key in stream.keys}

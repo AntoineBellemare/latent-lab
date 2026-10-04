@@ -26,12 +26,13 @@ this encoder cannot tell apart, and no amount of steering between them will look
 import argparse
 import itertools
 import pathlib
+import random
 
 import numpy as np
 import torch
 from PIL import Image, ImageDraw
 
-from lora import images, square
+from lora import SUFFIXES, images, square
 
 # A base, the adapter made for it, and how to draw from it quickly. `encoder` is where the adapter's
 # own image encoder lives, relative to `repo`.
@@ -222,28 +223,57 @@ def draw(pipe, dtype, p, args, vec, seed, device):
     ).images[0]
 
 
+def crops_of(root, name, count, side, detail, seed=0):
+    """Real crops of one category, at the scale the space was built from.
+
+    The question a sheet of generated textures cannot answer on its own is whose textures they are:
+    the set's, or the base model's idea of rock and water. Putting the photographs directly under
+    the renders is the only honest way to ask it.
+    """
+    found = sorted(q for q in (pathlib.Path(root).expanduser() / name).rglob("*") if q.suffix.lower() in SUFFIXES)
+    if not found:
+        return []
+    rng = random.Random(seed)
+    out = []
+    for path in rng.sample(found, min(count, len(found))):
+        with Image.open(path) as im:
+            im.draft("RGB", (im.width // 2, im.height // 2))
+            im = im.convert("RGB")
+        piece = max(1, round(min(im.size) / detail))
+        left, top = rng.randint(0, im.width - piece), rng.randint(0, im.height - piece)
+        out.append(im.crop((left, top, left + piece, top + piece)).resize((side, side), Image.LANCZOS))
+    return out
+
+
 def render(args, p, device):
     space = dict(np.load(args.space))
     names = [str(n) for n in space["names"]]
     pipe, dtype = pipeline(args, p, device)
-    cols = args.cols
+    cols, side, label = args.cols, p["size"], 22
+
+    def drawn(vecs, seeds):
+        return [draw(pipe, dtype, p, args, v, s, device).resize((side, side)) for v, s in zip(vecs, seeds)]
+
     rows = []
     for c, n in enumerate(names):
-        rows.append((f"{n}: its mean, {cols} seeds", [point(space, c) for _ in range(cols)], list(range(cols))))
+        rows.append((f"{n}: its mean, {cols} seeds", drawn([point(space, c) for _ in range(cols)], range(cols))))
+        if args.beside:
+            real = crops_of(args.beside, n, cols, side, args.detail)
+            if real:
+                rows.append((f"{n}: real crops of the photographs", real))
     for a, b in zip(range(len(names)), range(1, len(names))):
         ends = point(space, a), point(space, b)
-        rows.append((f"{names[a]} to {names[b]}, one seed", [slerp(*ends, t) for t in np.linspace(0, 1, cols)], [0] * cols))
+        rows.append((f"{names[a]} to {names[b]}, one seed", drawn([slerp(*ends, t) for t in np.linspace(0, 1, cols)], [0] * cols)))
     for k in range(min(args.sweep, len(space["spread"]))):
-        rows.append((f"axis {k}, -2 to +2 spreads", [point(space, None, [0] * k + [t]) for t in np.linspace(-2, 2, cols)], [0] * cols))
+        rows.append((f"axis {k}, -2 to +2 spreads", drawn([point(space, None, [0] * k + [t]) for t in np.linspace(-2, 2, cols)], [0] * cols)))
 
-    side, label = p["size"], 22
     canvas = Image.new("RGB", (cols * side, len(rows) * (side + label)), (18, 18, 20))
     pen = ImageDraw.Draw(canvas)
-    for r, (title, vecs, seeds) in enumerate(rows):
+    for r, (title, tiles) in enumerate(rows):
         y = r * (side + label)
         pen.text((6, y + 5), title, fill=(220, 220, 220))
-        for i, (vec, seed) in enumerate(zip(vecs, seeds)):
-            canvas.paste(draw(pipe, dtype, p, args, vec, seed, device).resize((side, side)), (i * side, y + label))
+        for i, tile in enumerate(tiles):
+            canvas.paste(tile, (i * side, y + label))
         print(f"  {title}", flush=True)
     canvas.save(args.sheet)
     print(f"wrote {args.sheet}")
@@ -276,6 +306,7 @@ def main():
     ap.add_argument("--style", type=float, default=1.0, help="How hard the LoRA pulls.")
     ap.add_argument("--cols", type=int, default=6)
     ap.add_argument("--sweep", type=int, default=4, help="Principal axes to sweep on the sheet.")
+    ap.add_argument("--beside", help="The set, to put real crops of each category under its row.")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     if not (args.images or (args.space and args.sheet)):

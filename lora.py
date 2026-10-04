@@ -99,6 +99,25 @@ class Crops(torch.utils.data.IterableDataset):
                 print(f"  skipped {path.name}: {e}", flush=True)
 
 
+class Caption:
+    """What a crop is captioned with.
+
+    An object rather than the closure this was: a DataLoader worker on Windows is SPAWNED, which
+    pickles the dataset and everything it holds, and a function defined inside another function
+    cannot be pickled. On a forking platform the closure works and this never shows up.
+    """
+
+    def __init__(self, template, named, trigger):
+        self.template, self.named, self.trigger = template, named, trigger
+
+    def __call__(self, path):
+        beside = path.with_suffix(".txt")
+        if beside.is_file():
+            return beside.read_text(encoding="utf-8").strip()
+        folder = path.parent.name
+        return self.template.format(name=self.named.get(folder, folder), trigger=self.trigger)
+
+
 def names_of(pairs):
     out = {}
     for pair in pairs:
@@ -164,13 +183,7 @@ def main():
     named = names_of(args.name)
     template = args.caption or ("a close-up photograph of {name}, {trigger}" if args.classes else "{trigger}")
 
-    def caption_of(path):
-        beside = path.with_suffix(".txt")
-        if beside.is_file():
-            return beside.read_text(encoding="utf-8").strip()
-        folder = path.parent.name
-        return template.format(name=named.get(folder, folder), trigger=args.trigger)
-
+    caption_of = Caption(template, named, args.trigger)
     stream = Crops(files, args.size, args.detail, args.classes, caption_of)
     print(f"{len(files)} images under {args.images}, training at {args.size} on {device}, a crop sees 1/{args.detail:g} of a frame")
     for key in stream.keys:

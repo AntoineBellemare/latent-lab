@@ -198,6 +198,21 @@ def point(space, category=None, coords=()):
     return v * (space["norm"] / np.linalg.norm(v))
 
 
+def crop_points(space, category, count, seed=0):
+    """Vectors of individual crops from one category, rather than their average.
+
+    The mean of a few thousand crops is the most generic point a category has: the orange lichen in
+    one and the teal paint in another cancel toward grey, which is what the means drew. A single
+    crop's vector keeps what made it worth photographing, and it costs nothing — the space already
+    holds every one of them.
+    """
+    mine = np.flatnonzero(space["owner"] == category)
+    if not len(mine):
+        return []
+    picked = np.random.default_rng(seed).choice(mine, size=min(count, len(mine)), replace=False)
+    return [space["emb"][i] * (space["norm"] / np.linalg.norm(space["emb"][i])) for i in picked]
+
+
 def slerp(a, b, t):
     """Along the sphere rather than through it, as `play.py` morphs: a straight line dips towards the mean."""
     na, nb = np.linalg.norm(a), np.linalg.norm(b)
@@ -257,6 +272,10 @@ def render(args, p, device):
     rows = []
     for c, n in enumerate(names):
         rows.append((f"{n}: its mean, {cols} seeds", drawn([point(space, c) for _ in range(cols)], range(cols))))
+        if args.singles:
+            vecs = crop_points(space, c, cols, seed=args.singles)
+            if len(vecs):
+                rows.append((f"{n}: {len(vecs)} single crops of the set, not their mean", drawn(vecs, [0] * len(vecs))))
         if args.beside:
             real = crops_of(args.beside, n, cols, side, args.detail)
             if real:
@@ -307,6 +326,12 @@ def main():
     ap.add_argument("--cols", type=int, default=6)
     ap.add_argument("--sweep", type=int, default=4, help="Principal axes to sweep on the sheet.")
     ap.add_argument("--beside", help="The set, to put real crops of each category under its row.")
+    ap.add_argument(
+        "--singles",
+        type=int,
+        default=0,
+        help="Seed for a row per category drawn from INDIVIDUAL crop vectors instead of their mean; 0 is off.",
+    )
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     if not (args.images or (args.space and args.sheet)):

@@ -72,9 +72,20 @@ same kind of thing.
   surfaces are the same wherever they were photographed. The consistency is in the eye, not in the
   trip — which is the thing a style model was supposed to capture, so finding it already there is
   the right answer arriving as a null result.
-- **Curate for the foundation, not for today's output.** The curated set is cleaner, traceable to
-  marks the photographer already made, and free of the carved figure and the mountain sky. It will
-  not change what the space draws.
+- **Curate for the foundation, not for the space.** The curated set is cleaner, traceable to marks
+  the photographer already made, and free of the carved figure and the mountain sky. It will not
+  change what the SPACE draws.
+- **It does change what the LoRA draws.** Trained on the same recipe, the curated LoRA is more
+  saturated and carries more of the lichen's colour than the one trained on the trip: gold and
+  green and pink where the old draws chalk, and granular verdigris where the old is grainy. Keeper:
+  `sd15-lora-yellow/step-002000`.
+- **Why one moved and the other did not.** A term knob is the mean of hundreds of crops, and means
+  converge however the sample was drawn — which is what the geometry already said. Training takes
+  gradient steps on individual photographs, so which photograph matters, and four-star frames are
+  the better photographs.
+- **The peak moved earlier.** The curated LoRA is mush by step 4,000 where the trip's was still
+  usable there and only broke at 6,000. A more consistent set regularises less. Numbered saves are
+  not optional.
 
 ## Next
 

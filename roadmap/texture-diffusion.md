@@ -20,24 +20,37 @@ same kind of thing.
 - **Checkpoints are chosen from drawn sheets, not from loss.** Loss held a normal band through
   3,000 steps while the pictures blurred to mush. `compare.py` holds prompt and seed and changes
   only the LoRA.
-- **Keeper: `sd15-lora-captioned/step-001000`**, applied at strength 1.0 to 1.8. It does not break
-  at 1.8, and higher strength means more crust and mineral speckle.
+- **Keeper: `sd15-lora-gentle/step-002000`, applied at 1.0 to 1.8.** Training at lr 3e-5 instead of
+  1e-4 moved the point where the LoRA blurs from step 1,500 out past 4,000, and it carries more of
+  the archive: dense lichen crust where the 1e-4 run drew chalk.
+- **Steps and strength trade as a product.** A LoRA trained further behaves like a less-trained one
+  applied harder, so neither can be read with the other held fixed. Blur begins around
+  steps x strength ~ 4,800: 2,000@1.6 and 3,000@1.0 are indistinguishable, 3,000@1.6 softens on
+  copper, 4,000@1.6 is mush on everything. Keep the product under ~4,000 to be safe.
+  step-002000 is the keeper because it has the widest usable range, 1.0 to 1.8, which is what a
+  signal needs if strength is going to be a live dial.
 - **Distilled bases cannot be fine-tuned this way.** sd-turbo and sdxl-turbo are ADD-trained; an
   ordinary DDPM objective destroys them, which cost a 14,000-step run. SD 1.5 is the base.
 
-## Running
+- **The space is continuous**, which is the property that matters for driving it from a signal:
+  rock dissolves into water across six morph steps with no jumps.
+- **`texture-ip-sd15.npz`** holds 17,064 vectors of 1,024, built from 8 crops of each image.
 
-- `sd15-lora-gentle` — the same captions at lr 3e-5 for 6,000 steps. 1e-4 overcooked by step 1,500,
-  so a third of it should absorb more of the archive before blurring.
+## Open question, running
+
+The space draws far softer than the photographs beside it, and the LoRA under it at 1.6 softens it
+further rather than sharpening it, so neither is the cause. The `sd15` preset carries an LCM LoRA at
+4 steps and guidance 1.0 — a realtime setting — and a style LoRA then stacks on top of LCM's own.
+`sharpen.sh` turns the speed-up off and denoises in 30 steps. If that sharpens the pictures, the
+softness was never in the vectors, and quality against speed becomes a dial to set deliberately
+rather than one inherited from a preset.
 
 ## Next
 
-1. Compare the gentle checkpoints against step-001000 on held seeds. Keep whichever holds detail
-   at the higher strengths.
-2. Build the IP space on the SD 1.5 preset, `--crops 8` over the set.
-3. Draw the space alone, with real crops beside each row, to see what it holds.
-4. Draw the space under the LoRA, at two style strengths. This is the pairing that matters: the
-   LoRA supplies the look, the space supplies a place to move.
+1. Read the sharpened sheets. Decide what the space is actually worth.
+2. If the preset was the cause, find the cheapest settings that still hold detail: that number is
+   what realtime has to afford later.
+3. Compose the space with `sd15-lora-gentle/step-002000` at a product under 4,000.
 
 ## Open, needs a decision
 

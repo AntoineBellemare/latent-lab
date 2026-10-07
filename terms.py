@@ -65,7 +65,10 @@ def term_vector(space, terms, found, push=3.0):
     for word, weight in terms.items():
         files = found.get(word, [])
         if not files:
-            raise SystemExit(f"no image is captioned {word!r} — run --list")
+            # Dropped rather than fatal: a preset written against one set is still mostly right on
+            # the next one, and losing a term should cost that term, not the whole mix.
+            print(f"  (no image is captioned {word!r} — dropped)")
+            continue
         keep = np.isin(space["owner"], files)
         at = space["emb"][keep].mean(0)
         total += weight * (centre + push * (at - centre))
@@ -80,6 +83,8 @@ def main():
     ap.add_argument("--least", type=int, default=25, help="With --list, the fewest images to report.")
     ap.add_argument("--image", help="The picture to turn.")
     ap.add_argument("--term", nargs="*", default=[], help="One row each; `word=weight` to mix.")
+    ap.add_argument("--preset", nargs="*", default=[], help="Named mixes from --presets; `all` for every one.")
+    ap.add_argument("--presets", default="presets.json")
     ap.add_argument("--push", type=float, default=3.0)
     ap.add_argument("--strength", type=float, default=0.5)
     ap.add_argument("--scales", type=float, nargs="*", default=[0.4, 0.8, 1.2])
@@ -103,8 +108,8 @@ def main():
                 print(f"  {len(files):>5}  {word}")
         return
 
-    if not (args.image and args.term and args.out):
-        raise SystemExit("give --image, --term and --out, or --list")
+    if not (args.image and args.out and (args.term or args.preset)):
+        raise SystemExit("give --image, --out and one of --term / --preset, or --list")
 
     from diffusers import AutoPipelineForImage2Image
 
@@ -117,12 +122,27 @@ def main():
     pipe.set_progress_bar_config(disable=True)
     source = fit(args.image, args.size)
 
+    book = {}
+    if args.preset:
+        import json
+        book = {k: v for k, v in json.loads(pathlib.Path(args.presets).read_text(encoding="utf-8")).items()
+                if not k.startswith("_")}
+        wanted = list(book) if args.preset == ["all"] else args.preset
+        for name in wanted:
+            if name not in book:
+                raise SystemExit(f"no preset named {name!r}; have: {', '.join(book)}")
+    else:
+        wanted = []
+
     rows, labels = [], []
-    for item in args.term:
-        mix = {}
-        for part in item.split("+"):
-            word, _, w = part.partition("=")
-            mix[word.strip()] = float(w or 1.0)
+    for item in wanted + args.term:
+        if item in book:
+            mix = dict(book[item])
+        else:
+            mix = {}
+            for part in item.split("+"):
+                word, _, w = part.partition("=")
+                mix[word.strip()] = float(w or 1.0)
         vec = term_vector(space, mix, found, args.push)
         emb = torch.tensor(vec, dtype=dtype, device=args.device).view(1, 1, -1)
         if args.guidance > 1.0:

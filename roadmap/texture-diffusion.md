@@ -63,6 +63,19 @@ same kind of thing.
   which divides out any shared factor, so `cat1=0.4` alone equals `cat1=1` alone. Only ratios in a
   mix matter. Intensity is `--scale`.
 
+- **Curating the set changed the space by nothing measurable.** Four-star Yellow spans seventeen
+  folders where the old set was one trip, yet the two spaces are statistically the same: 182 axes
+  to 90% of the variance against 185, spreads of 12.80 against 13.12, centres 0.22 of a spread
+  apart, and a crop from one set as close to the other set as to its own (median 10.2 either way).
+  The caption vocabularies match term for term. Every preset drew the same picture through both.
+- **What that says about the work.** The embedding reads surface, not provenance, and these
+  surfaces are the same wherever they were photographed. The consistency is in the eye, not in the
+  trip — which is the thing a style model was supposed to capture, so finding it already there is
+  the right answer arriving as a null result.
+- **Curate for the foundation, not for today's output.** The curated set is cleaner, traceable to
+  marks the photographer already made, and free of the carved figure and the mountain sky. It will
+  not change what the space draws.
+
 ## Next
 
 1. Find the cheapest denoising that still holds detail. That number is what realtime has to afford.

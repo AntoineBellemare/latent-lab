@@ -206,7 +206,7 @@ def crop_points(space, category, count, seed=0):
     crop's vector keeps what made it worth photographing, and it costs nothing — the space already
     holds every one of them.
     """
-    mine = np.flatnonzero(space["owner"] == category)
+    mine = np.flatnonzero(space["tag"] == category)
     if not len(mine):
         return []
     picked = np.random.default_rng(seed).choice(mine, size=min(count, len(mine)), replace=False)

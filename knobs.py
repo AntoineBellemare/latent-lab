@@ -58,7 +58,7 @@ def vector(space, weights, kind="mean", seed=0, push=1.0):
     centre = space["centre"]
     for c, w in weights.items():
         if kind == "crop":
-            mine = np.flatnonzero(space["owner"] == c)
+            mine = np.flatnonzero(space["tag"] == c)
             at = space["emb"][rng.choice(mine)]
         else:
             at = space["means"][c]

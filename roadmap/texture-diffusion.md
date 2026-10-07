@@ -48,11 +48,27 @@ same kind of thing.
   recognisably her; a building survives to 0.75 while a landscape has dissolved into rock by 0.6.
   Structure decides how far a picture can travel, so the sweep is drawn rather than guessed.
 
+- **Knobs, not words.** Prompting works but is a discrete interface: it needs the right one of 59
+  material words, and "an old painted wall" is not one of them — asking for it draws a room with a
+  lamp in it. `knobs.py` turns a source picture with a weight per category instead, which needs no
+  vocabulary and moves continuously.
+- **Four controls, and they are not interchangeable.** `--mix` chooses WHICH textures and in what
+  proportion; `--scale` is the intensity knob; `--strength` is how much of the source is redrawn;
+  `--push` is how far a category is exaggerated from the centre of the space.
+- **Raw category means make knobs that turn without pointing anywhere.** The means sit 0.43 to 0.66
+  apart in units of the spread within a category — two centres are half as far from each other as a
+  crop is from its own — so every knob drew the same grey crust. `--push 3` keeps the direction
+  that distinguishes a category and drops what they all share. Past 3 it saturates.
+- **A weight is a direction, not a volume.** The blend is rescaled to the length real crops have,
+  which divides out any shared factor, so `cat1=0.4` alone equals `cat1=1` alone. Only ratios in a
+  mix matter. Intensity is `--scale`.
+
 ## Next
 
 1. Find the cheapest denoising that still holds detail. That number is what realtime has to afford.
 2. Decide the trigger word, then recaption and retrain once if it changes.
-3. Carry the keeper and the space into goofi.
+3. Carry the keeper, the space and the knobs into goofi: seven weights, a scale and a strength is a
+   small enough surface for a signal to drive.
 
 ## Open, needs a decision
 

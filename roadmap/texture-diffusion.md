@@ -36,21 +36,23 @@ same kind of thing.
   rock dissolves into water across six morph steps with no jumps.
 - **`texture-ip-sd15.npz`** holds 17,064 vectors of 1,024, built from 8 crops of each image.
 
-## Open question, running
-
-The space draws far softer than the photographs beside it, and the LoRA under it at 1.6 softens it
-further rather than sharpening it, so neither is the cause. The `sd15` preset carries an LCM LoRA at
-4 steps and guidance 1.0 — a realtime setting — and a style LoRA then stacks on top of LCM's own.
-`sharpen.sh` turns the speed-up off and denoises in 30 steps. If that sharpens the pictures, the
-softness was never in the vectors, and quality against speed becomes a dial to set deliberately
-rather than one inherited from a preset.
+- **The space was never soft; the preset was.** Drawn through `sd15`, which carries an LCM LoRA at
+  4 steps and guidance 1.0, every category came out blurred. At 30 steps with the speed-up off the
+  same vectors draw rock faces with mineral striations and ochre veins. Quality against speed is a
+  dial to set deliberately, not one to inherit.
+- **The two instruments do not need each other.** Composed under the space at 30 steps the LoRA
+  softens it rather than sharpening it: the space is built from the photographs, so it already
+  carries the look. The LoRA earns its place where there is no image vector — prompting from words.
+- **Any picture can be carried into the archive's look.** `restyle.py` runs img2img and sweeps the
+  one number that matters. A portrait at strength 0.3 becomes carved weathered stone and is still
+  recognisably her; a building survives to 0.75 while a landscape has dissolved into rock by 0.6.
+  Structure decides how far a picture can travel, so the sweep is drawn rather than guessed.
 
 ## Next
 
-1. Read the sharpened sheets. Decide what the space is actually worth.
-2. If the preset was the cause, find the cheapest settings that still hold detail: that number is
-   what realtime has to afford later.
-3. Compose the space with `sd15-lora-gentle/step-002000` at a product under 4,000.
+1. Find the cheapest denoising that still holds detail. That number is what realtime has to afford.
+2. Decide the trigger word, then recaption and retrain once if it changes.
+3. Carry the keeper and the space into goofi.
 
 ## Open, needs a decision
 

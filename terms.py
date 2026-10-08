@@ -61,7 +61,16 @@ def index(space):
 def term_vector(space, terms, found, push=3.0):
     """The mean of the crops of every image carrying these terms, pushed off the centre."""
     centre = space["centre"]
+    # The deviations are averaged and the centre added once. Adding `centre + push * deviation` per
+    # term and summing gives the same direction — the two differ by the factor the rescale divides
+    # out — but this way says what is meant: a mix is one point, not a pile of points.
+    #
+    # It does NOT make a mix as distinct as a single term, and nothing here can. Averaging terms
+    # lands between them, which is nearer the centre of the space than any of them: measured, the
+    # ten presets sit 16.8 apart where single terms sit 21.5. A mix therefore wants a larger push
+    # than a term does.
     total = np.zeros(space["emb"].shape[1], np.float32)
+    carried = 0.0
     for word, weight in terms.items():
         files = found.get(word, [])
         if not files:
@@ -71,7 +80,11 @@ def term_vector(space, terms, found, push=3.0):
             continue
         keep = np.isin(space["owner"], files)
         at = space["emb"][keep].mean(0)
-        total += weight * (centre + push * (at - centre))
+        total += weight * (at - centre)
+        carried += weight
+    if carried <= 0:
+        return centre * (float(space["norm"]) / np.linalg.norm(centre))
+    total = centre + push * (total / carried)
     size = np.linalg.norm(total)
     return total * (float(space["norm"]) / size) if size > 1e-6 else total
 

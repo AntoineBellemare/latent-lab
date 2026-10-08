@@ -87,6 +87,18 @@ same kind of thing.
   usable there and only broke at 6,000. A more consistent set regularises less. Numbered saves are
   not optional.
 
+- **Curation HURT the GAN, on the same recipe and the same 50,000 steps.** Latent movement fell
+  from 0.249 to 0.118 and the weakest category pair from 0.143 to 0.042; the pictures went flat,
+  losing the orange-and-teal rock, the lit water ripple and the crusted ice the trip's GAN draws.
+- **Three instruments, three answers, and the reason is where the capacity lives.** The IP space
+  averages hundreds of crops, and averages converge however the sample was drawn, so nothing moved.
+  The LoRA rides a pretrained model that already knows textures and only learns a shift, so better
+  individual photographs made it better. A GAN has to model the whole distribution itself at fixed
+  capacity, so widening the distribution from one trip to seventeen spread it thin and it blurred.
+- **For a GAN, prefer a narrow coherent set.** One trip is not a defect there; it is why the old
+  GAN is sharp. If a curated GAN is wanted, narrow it again — one category, or one trip's Yellow
+  frames — rather than feeding it the whole body of work.
+
 ## Next
 
 1. Find the cheapest denoising that still holds detail. That number is what realtime has to afford.

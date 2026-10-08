@@ -86,6 +86,8 @@ def main():
     ap.add_argument("--preset", nargs="*", default=[], help="Named mixes from --presets; `all` for every one.")
     ap.add_argument("--presets", default="presets.json")
     ap.add_argument("--push", type=float, default=3.0)
+    ap.add_argument("--lora", help="A LoRA folder to put the look under the space.")
+    ap.add_argument("--style", type=float, default=1.0, help="How hard the LoRA pulls.")
     ap.add_argument("--strength", type=float, default=0.5)
     ap.add_argument("--scales", type=float, nargs="*", default=[0.4, 0.8, 1.2])
     ap.add_argument("--size", type=int, default=512)
@@ -119,6 +121,9 @@ def main():
     ).to(args.device)
     pipe.load_ip_adapter(PRESET["repo"], subfolder=PRESET["subfolder"], weight_name=PRESET["weight"],
                          image_encoder_folder=None)
+    if args.lora:
+        pipe.load_lora_weights(args.lora, weight_name="pytorch_lora_weights.safetensors")
+        pipe.fuse_lora(lora_scale=args.style)
     pipe.set_progress_bar_config(disable=True)
     source = fit(args.image, args.size)
 

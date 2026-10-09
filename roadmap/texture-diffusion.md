@@ -102,6 +102,18 @@ same kind of thing.
   `min(im.size)` matches on both. A GAN learning fine texture pays for it at once; the space and
   the LoRA, which work at 512 regardless, barely noticed.
 
+- **Resized to 1600 the flatness goes away.** Yellow at three stars and up, written out the way
+  the original was, draws pebbled stone, a turquoise shoreline with foam, striated water and
+  orange crust — as sharp as the old GAN and nothing like the haze the full-resolution run made.
+  The resolution was the fault, and the fix proves it.
+- **Three stars buys data and costs conditioning.** 4,345 frames after dedupe against 2,133, but
+  the categories come out weaker: DINOv2 agrees with the split only 58 to 69 per cent on four of
+  the seven, and the weakest category pair falls to 0.039 against 0.143 for four stars. More
+  marginal frames blur the boundaries the conditioning is supposed to find.
+- **So the old GAN was already the four-star Yellow GAN.** The criterion asked for this week is
+  the criterion it was built on in September. For a conditional model four stars remains the bar;
+  three stars is the set to reach for only when the categories do not matter.
+
 ## Next
 
 1. Find the cheapest denoising that still holds detail. That number is what realtime has to afford.

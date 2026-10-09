@@ -87,17 +87,20 @@ same kind of thing.
   usable there and only broke at 6,000. A more consistent set regularises less. Numbered saves are
   not optional.
 
-- **Curation HURT the GAN, on the same recipe and the same 50,000 steps.** Latent movement fell
-  from 0.249 to 0.118 and the weakest category pair from 0.143 to 0.042; the pictures went flat,
-  losing the orange-and-teal rock, the lit water ripple and the crusted ice the trip's GAN draws.
-- **Three instruments, three answers, and the reason is where the capacity lives.** The IP space
-  averages hundreds of crops, and averages converge however the sample was drawn, so nothing moved.
-  The LoRA rides a pretrained model that already knows textures and only learns a shift, so better
-  individual photographs made it better. A GAN has to model the whole distribution itself at fixed
-  capacity, so widening the distribution from one trip to seventeen spread it thin and it blurred.
-- **For a GAN, prefer a narrow coherent set.** One trip is not a defect there; it is why the old
-  GAN is sharp. If a curated GAN is wanted, narrow it again — one category, or one trip's Yellow
-  frames — rather than feeding it the whole body of work.
+- **The original set was already Yellow at four stars.** `pick_on1.py`, run 2026-09-08, filtered
+  the archive on exactly `label == "Yellow" and rating >= 4` and matched 2,560 files across
+  eighteen trips, which `extract.py` then wrote out as 2,335 JPEGs. Tracing it by DSC basename
+  said "one trip" and that was an artefact: basenames collide across trips and the first match
+  wins. The old set and the curated set are very nearly the same photographs.
+- **`extract.py` also resized every frame to 1600px on its shortest side, and that is the whole
+  GAN result.** `--detail 3` takes a third of the shortest side and resizes it to 512: from 1600px
+  that is a 533px crop at essentially 1:1, from a 4000px original it is a 1333px crop downscaled
+  2.6x. The rebuild hardlinked originals, so the GAN was shown crops with 2.6x less detail and
+  drew exactly that. Nothing to do with diversity.
+- **`--detail` is a fraction of the frame, not a pixel count.** The same flag means a different
+  magnification on a different source resolution, so two sets are not the same experiment until
+  `min(im.size)` matches on both. A GAN learning fine texture pays for it at once; the space and
+  the LoRA, which work at 512 regardless, barely noticed.
 
 ## Next
 

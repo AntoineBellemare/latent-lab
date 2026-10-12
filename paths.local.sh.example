@@ -1,0 +1,4 @@
+# Copy to paths.local.sh and edit. Not tracked, so your own layout stays yours.
+PY="/path/to/python"
+OUT="/path/to/models"
+SETS="/path/to/image-sets"

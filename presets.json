@@ -1,0 +1,63 @@
+{
+  "_": "Named mixes over caption terms. A preset is a way in, not a boundary: it names a point you can then slide away from. Edit freely — any term that `terms.py --list` reports is valid, and a term no caption carries is dropped with a warning rather than failing. Give a mix a LARGER --push than a single term: averaging terms lands between them, which is nearer the centre of the space than any of them, so at push 3 the ten presets sit 16.8 apart where single terms sit 21.5. Push 8 brings them to 25.8; past 12 it stops paying.",
+  "rock structure": {
+    "striated": 1.0,
+    "eroded": 0.7,
+    "deeply fissured": 0.5,
+    "banded": 0.3
+  },
+  "crumbling stone": {
+    "eroded": 1.0,
+    "pockmarked": 0.7,
+    "weathered": 0.5,
+    "pitted": 0.4
+  },
+  "water reflections": {
+    "glassy": 1.0,
+    "marbled": 0.7,
+    "rippled": 0.5,
+    "swirling": 0.3
+  },
+  "moving water": {
+    "rippled": 1.0,
+    "foamy": 0.7,
+    "swirling": 0.6,
+    "undulating": 0.3
+  },
+  "living crust": {
+    "encrusted": 1.0,
+    "mottled": 0.6,
+    "speckled": 0.5,
+    "cellular": 0.3
+  },
+  "corroded metal": {
+    "oxidised copper": 1.0,
+    "blistered": 0.6,
+    "flaking": 0.5,
+    "rust on iron": 0.4
+  },
+  "flaking surface": {
+    "peeling": 1.0,
+    "flaking": 0.8,
+    "blistered": 0.5,
+    "cracked plaster": 0.3
+  },
+  "fibrous growth": {
+    "fibrous": 1.0,
+    "branching": 0.8,
+    "stringy": 0.4,
+    "web-like": 0.3
+  },
+  "crystalline": {
+    "crystalline": 1.0,
+    "honeycombed": 0.6,
+    "scaled": 0.4,
+    "cellular": 0.3
+  },
+  "veined mineral": {
+    "finely veined": 1.0,
+    "a mineral vein": 0.7,
+    "banded": 0.5,
+    "striated": 0.3
+  }
+}

@@ -1,6 +1,6 @@
 """Hold on to the snapshot that sits closest to the data, because the trainer overwrites its export.
 
-    python keep_best.py --watch C:/Users/Antoine/goofi-models/textures-raw.onnx
+    python keep_best.py --watch models/textures-raw.onnx
 
 Scores each new export on three colour statistics against the real set and keeps the best pair of
 files seen. A GAN wanders; without this the good pass is gone by the time you have measured it.
@@ -42,7 +42,7 @@ def main():
     ap.add_argument("--watch", required=True)
     ap.add_argument("--tag", default="best", help="Suffix for the kept copies.")
     ap.add_argument("--beat", type=float, help="Only keep a snapshot scoring below this.")
-    ap.add_argument("--images", default="G:/Antoine/PHOTOGRAPHIE/goofi-training-set")
+    ap.add_argument("--images", required=True, help="The real set, to score draws against.")
     ap.add_argument("--draws", type=int, default=16)
     ap.add_argument("--ceiling", type=float, default=2.0, help="Reject a snapshot tiling this many times the data's own.")
     args = ap.parse_args()

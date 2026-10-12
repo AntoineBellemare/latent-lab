@@ -340,3 +340,58 @@ motion.
 `--rank` is how much the LoRA can hold: 16 is a style, higher starts memorising the set. The loss
 printed is noisy by construction — every step draws a random timestep — so read its trend over
 hundreds of steps and judge the result by looking at it.
+
+### Training on a set of big photographs, and on its categories
+
+```bash
+python lora.py --images ~/pictures/set-by-category --classes --detail 3 \
+    --name cat0=water cat1=rock cat2=waves --model stabilityai/sdxl-turbo --out set-lora
+```
+
+**`--detail` matters here as much as it does for `style_ca.py`.** At 1 a 6000-pixel macro is squeezed
+whole into 512 pixels, and the LoRA learns the palette of the set without its surface. At 3 a crop
+sees a third of the frame. Crops are opened per step rather than held, because the set held at
+`size * detail` is tens of gigabytes; `--workers` decode them while the GPU trains.
+
+`--classes` reads each image's category from its folder, which is what `by_category.py` writes,
+draws the categories evenly whatever their sizes, and captions each crop with `--caption` — by
+default `a close-up photograph of {name}, {trigger}`, where `--name` says what a folder is called. A
+real word for the material borrows what the base already knows about water or bark; the trigger ties
+it to this set. The prompt then picks the material, and a prompt can name two.
+
+It ends by drawing a sheet, one row per caption, into the output folder beside `latent-lab.json`,
+which records what was trained and how to ask for it. A row that looks like every other row is a
+caption the LoRA did not learn to mean anything.
+
+SD 1.x/2.x and SDXL bases both train. `sdxl-turbo` is worth the extra memory: it is the base the
+pretrained IP-Adapters and most ControlNets were made for, which `ip_space.py` needs.
+
+## ip_space.py — the set itself as the space, through an IP-Adapter
+
+```bash
+python ip_space.py --images ~/pictures/set-by-category --detail 3 --out set-ip.npz
+python ip_space.py --space set-ip.npz --sheet set-ip.png --lora set-lora
+```
+
+An IP-Adapter lets an image steer a diffusion model the way a prompt does: an image encoder turns a
+picture into one vector, and the adapter feeds that vector into every cross-attention layer beside
+the text. Nothing about that vector has to come from one picture. This embeds crops of every image,
+and takes the cloud of vectors as the space: a mean per category, and principal axes across them.
+Every point is a prompt, and moving the point is a walk. **Nothing is trained**: the base and the
+adapter are pretrained, and the photographs are only ever the adapter's input.
+
+The build prints what the space is worth before anything is drawn: the variance on each axis, and
+how far apart the category means sit against the spread inside a category, pair by pair. Read the
+smallest pair, as with `separation.py` — a pair near zero is one this encoder cannot tell apart, and
+steering between them will not look like steering.
+
+The sheet draws each category's mean over several seeds, a morph between neighbouring categories
+with the seed held, and a sweep along the first principal axes. Every point is rescaled to the
+length a real crop's vector has: a mean is shorter than what it averages, and the adapter reads a
+short vector as a faint one. Morphs go along the sphere for the same reason `play.py`'s do.
+
+The vectors must come from the encoder the adapter was trained with, which is why this embeds again
+rather than reading `categories.py`'s cache: that is another CLIP, and its numbers are another space.
+The space remembers its `--preset`, so a sheet is drawn with the adapter it was built for.
+`--style-only` (SDXL) steers only the block that carries style, so a reference's layout does not
+come with its surface — for textures that seldom matters, for anything with a composition it does.

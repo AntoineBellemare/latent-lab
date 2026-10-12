@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/paths.sh"
 # The GAN recipe that won, on the curated set. Two phases, because one tag-lr does not do both
 # jobs: at 1.0 the category embeddings stay near silent and three mineral categories came out
 # merged after 42,000 steps, while a high tag-lr separates them but costs picture quality. So the
 # categories are pulled apart first and the picture is settled afterwards.
 
-PY="C:/Users/Antoine/github/goofi/training/.venv/Scripts/python.exe"
-SET="G:/Antoine/PHOTOGRAPHIE/goofi-yellow-4star/texture"
-BYCAT="G:/Antoine/PHOTOGRAPHIE/goofi-yellow-by-category"
-OUT="C:/Users/Antoine/goofi-models"
+SET="$SETS/yellow-4star/texture"
+BYCAT="$SETS/yellow-by-category"
 GAN="$OUT/gan-yellow"
-cd "C:/Users/Antoine/github/latent-lab" || exit 1
+cd "$LAB" || exit 1
 step() { echo; echo "=== $* ==="; date; }
 
 mkdir -p "$GAN"

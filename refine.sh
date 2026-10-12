@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/paths.sh"
 # Runs after night.sh. Step count and inference strength trade against each other: gentle-4000 was
 # the richest on lichen but already soft on copper, while gentle-2000 was crispest on copper. That
 # is the signature of one LoRA simply pushing harder than another, not of one being better, so the
 # two are varied together here instead of one at a time.
 
-PY="C:/Users/Antoine/github/goofi/training/.venv/Scripts/python.exe"
-OUT="C:/Users/Antoine/goofi-models"
 G="$OUT/sd15-lora-gentle"
-cd "C:/Users/Antoine/github/latent-lab" || exit 1
+cd "$LAB" || exit 1
 
 # Bounded wait: if night.sh has not finished in three hours it has failed, and starting GPU work
 # beside whatever it is still doing would only confuse the result.

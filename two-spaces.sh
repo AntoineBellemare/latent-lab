@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/paths.sh"
 # The same presets, the same picture, the same seed, through both spaces. The only thing that
 # differs is which photographs the space was built from, which is the whole question: does 2,107
 # curated four-star frames beat 2,133 unfiltered ones.
 
-PY="C:/Users/Antoine/github/goofi/training/.venv/Scripts/python.exe"
-OUT="C:/Users/Antoine/goofi-models"
 IMG="$OUT/restyle-sources/portrait.png"
-cd "C:/Users/Antoine/github/latent-lab" || exit 1
+cd "$LAB" || exit 1
 
 for _ in $(seq 120); do
     grep -aq "^=== yellow done ===" "$OUT/yellow.log" && break
@@ -29,8 +28,8 @@ echo; echo "=== the same presets through both ==="
 "$PY" - <<'PY'
 from PIL import Image, ImageDraw
 import json, pathlib
-a = Image.open("C:/Users/Antoine/goofi-models/presets-old.png")
-b = Image.open("C:/Users/Antoine/goofi-models/presets-new.png")
+a = Image.open("$OUT/presets-old.png")
+b = Image.open("$OUT/presets-new.png")
 cell, gut = 512, 330
 names = [k for k in json.loads(pathlib.Path("presets.json").read_text(encoding="utf-8")) if not k.startswith("_")]
 sheet = Image.new("RGB", (gut + 3 * cell, 30 + len(names) * cell), (18, 18, 20))
@@ -42,9 +41,9 @@ for r, name in enumerate(names):
     sheet.paste(a.crop((gut, 30 + r * cell, gut + cell, 30 + (r + 1) * cell)), (gut, 30 + r * cell))
     sheet.paste(a.crop((gut + cell, 30 + r * cell, gut + 2 * cell, 30 + (r + 1) * cell)), (gut + cell, 30 + r * cell))
     sheet.paste(b.crop((gut + cell, 30 + r * cell, gut + 2 * cell, 30 + (r + 1) * cell)), (gut + 2 * cell, 30 + r * cell))
-sheet.save("C:/Users/Antoine/goofi-models/old-vs-curated.png")
+sheet.save("$OUT/old-vs-curated.png")
 sheet.resize((int(sheet.width * 0.42), int(sheet.height * 0.42)), Image.LANCZOS).save(
-    "C:/Users/Antoine/goofi-models/old-vs-curated-small.png")
+    "$OUT/old-vs-curated-small.png")
 print("wrote old-vs-curated.png")
 PY
 echo "=== comparison done ==="

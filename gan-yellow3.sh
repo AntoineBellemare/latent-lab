@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/paths.sh"
 # Yellow at three stars and up: 4,541 frames, still all texture, still seventeen trips, but 2.2x the
 # data of the four-star set.
 #
@@ -8,12 +9,10 @@
 # only way to tell whether a GAN blurred because the world got wider or because it was shown too
 # little of it.
 
-PY="C:/Users/Antoine/github/goofi/training/.venv/Scripts/python.exe"
-SET="G:/Antoine/PHOTOGRAPHIE/goofi-yellow-3star/texture"
-BYCAT="G:/Antoine/PHOTOGRAPHIE/goofi-yellow3-by-category"
-OUT="C:/Users/Antoine/goofi-models"
+SET="$SETS/yellow-3star/texture"
+BYCAT="$SETS/yellow3-by-category"
 GAN="$OUT/gan-yellow3"
-cd "C:/Users/Antoine/github/latent-lab" || exit 1
+cd "$LAB" || exit 1
 step() { echo; echo "=== $* ==="; date; }
 mkdir -p "$GAN"
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/paths.sh"
 # Yellow at three stars and up, written out the way the original set was written: resized to 1600px
 # on the shortest side, not hardlinked at full resolution.
 #
@@ -7,24 +8,21 @@
 # original it is a 1333px crop downscaled 2.6x. The flag is a fraction of the frame, not a pixel
 # count, so the same recipe means a different magnification on a different source.
 
-PY="C:/Users/Antoine/github/goofi/training/.venv/Scripts/python.exe"
-FROM="G:/Antoine/PHOTOGRAPHIE/goofi-yellow-3star/texture"
-SET="G:/Antoine/PHOTOGRAPHIE/goofi-yellow3-1600/texture"
-BYCAT="G:/Antoine/PHOTOGRAPHIE/goofi-yellow3-1600-by-category"
-OUT="C:/Users/Antoine/goofi-models"
+FROM="$SETS/yellow-3star/texture"
+SET="$SETS/yellow3-1600/texture"
+BYCAT="$SETS/yellow3-1600-by-category"
 GAN="$OUT/gan-yellow3"
-cd "C:/Users/Antoine/github/latent-lab" || exit 1
+cd "$LAB" || exit 1
 step() { echo; echo "=== $* ==="; date; }
 mkdir -p "$GAN"
 
 step "resizing to 1600 on the shortest side"
-"$PY" -u - <<'PY'
-import pathlib
+"$PY" -u - "$FROM" "$SET" <<'PY'
+import pathlib, sys
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 SIDE = 1600
-src = pathlib.Path("G:/Antoine/PHOTOGRAPHIE/goofi-yellow-3star/texture")
-out = pathlib.Path("G:/Antoine/PHOTOGRAPHIE/goofi-yellow3-1600/texture")
+src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 out.mkdir(parents=True, exist_ok=True)
 files = sorted(p for p in src.glob("*") if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".tif", ".tiff"})
 def one(p):

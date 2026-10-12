@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/paths.sh"
 # One sequential pass, run unattended. Deliberately no retry loop: a loop that relaunches a killed
 # GPU job once put two trainers on one card writing to the same files for seven hours.
 #
 # Paths are Windows-style with forward slashes, which both bash and Python accept here. A POSIX
 # `/c/Users/...` reaches Python as `\c\Users\...` and is not a path at all — that cost a run.
 
-PY="C:/Users/Antoine/github/goofi/training/.venv/Scripts/python.exe"
-LAB="C:/Users/Antoine/github/latent-lab"
-OUT="C:/Users/Antoine/goofi-models"
-SET="G:/Antoine/PHOTOGRAPHIE/goofi-training-set-by-category"
+SET="$SETS/training-set-by-category"
 SHARP="$OUT/sd15-lora-captioned/step-001000"
 cd "$LAB" || exit 1
 

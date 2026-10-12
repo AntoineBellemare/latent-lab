@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/paths.sh"
 # The space drew soft, and the LoRA did not sharpen it, so neither is the cause. The sd15 preset
 # runs an LCM LoRA at 4 steps and guidance 1.0, built for speed; a style LoRA then stacks on top of
 # LCM's own. This turns the speed-up off and denoises properly to find out what the space actually
 # holds. If it sharpens, the preset is a realtime setting and not the one to judge the space by.
 
-PY="C:/Users/Antoine/github/goofi/training/.venv/Scripts/python.exe"
-OUT="C:/Users/Antoine/goofi-models"
-SET="G:/Antoine/PHOTOGRAPHIE/goofi-training-set-by-category"
+SET="$SETS/training-set-by-category"
 SPACE="$OUT/texture-ip-sd15.npz"
 # Between the two readings: 2,000 was crisper on copper, 4,000 richer on lichen.
 LORA="$OUT/sd15-lora-gentle/step-003000"
-cd "C:/Users/Antoine/github/latent-lab" || exit 1
+cd "$LAB" || exit 1
 
 for _ in $(seq 60); do
     grep -aq "^=== refine done ===" "$OUT/refine.log" && break

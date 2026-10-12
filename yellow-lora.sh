@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
+. "$(dirname "$0")/paths.sh"
 # The LoRA for the curated set, on the recipe that won on the old one: lr 3e-5, which moved the
 # point where it blurs from step 1,500 out past 4,000. Numbered saves because the peak is chosen
 # from drawn sheets and never from the loss — the loss held a normal band through 3,000 steps while
 # the pictures blurred to mush.
 
-PY="C:/Users/Antoine/github/goofi/training/.venv/Scripts/python.exe"
-SET="G:/Antoine/PHOTOGRAPHIE/goofi-yellow-4star/texture"
-OUT="C:/Users/Antoine/goofi-models"
+SET="$SETS/yellow-4star/texture"
 NEW="$OUT/sd15-lora-yellow"
-cd "C:/Users/Antoine/github/latent-lab" || exit 1
+cd "$LAB" || exit 1
 step() { echo; echo "=== $* ==="; date; }
 
 # Behind the space comparison, never beside it: one card.

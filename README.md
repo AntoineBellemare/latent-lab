@@ -26,6 +26,47 @@ uv pip install --python .venv/Scripts/python.exe pillow numpy onnx
 
 Drop the `--index-url` for a CPU-only machine, and change `cu126` to whatever CUDA the card wants.
 
+## Where the trained models are
+
+The weights built with this repo live on HuggingFace, in two private repos under the
+[Kairos-Hive](https://huggingface.co/Kairos-Hive) org. The code here is the tooling; those are the
+results.
+
+**[Kairos-Hive/latent-textures](https://huggingface.co/Kairos-Hive/latent-textures)** — the models
+
+| path | what it is | driven by |
+|---|---|---|
+| `lora/sd15-lora-yellow-step002000/` | SD 1.5 LoRA, rank 16 | words, through `lora.py`'s trigger |
+| `space/texture-ip-yellow.npz` | 16,856 CLIP-ViT-H crop vectors | vectors, through `terms.py` / `knobs.py` |
+| `gan/conditional-512.onnx` | FastGAN, 512px, 7 categories | a latent and a category |
+| `gan/grown-1024.onnx` | the same, grown by `grow.py` | a latent and a category |
+| `gan/conditional-512-yellow3.onnx` | 512px on the wider three-star set | a latent and a category |
+| `captions/` | 2,107 per-image descriptions | — |
+| `presets.json` | ten named mixes of caption terms | — |
+
+**[Kairos-Hive/latent-textures-sets](https://huggingface.co/Kairos-Hive/latent-textures-sets)** — the
+photographs and how they were chosen: `training-set-1600/` (2,133 frames) and `yellow3-1600/`
+(4,345), both at 1600px with bursts removed, plus `meta/` holding the ON1 marks the selection was
+made from and each set's category split.
+
+**Which to reach for.** The GAN is the cheapest to run and the only one that needs no diffusion
+model, so it is what goofi loads. The LoRA is for drawing something new from a description. The
+space is for *navigating* — it is continuous, so a signal can drive it, and it needs no training at
+all. They compose: the space says which surface, the LoRA says rendered like these photographs.
+
+The sets are 1600px on the shortest side and that is not incidental. `--detail 3` takes a crop of a
+third of the shortest side and resizes it to 512, so from 1600px that is a 533px crop at essentially
+1:1, and from a 4000px original it is a 1333px crop downscaled 2.6x. **The flag is a fraction of the
+frame, not a pixel count**, so the same recipe means a different magnification on a different
+source. A GAN learning fine texture draws that loss at once; an embedding or a diffusion LoRA, which
+work at 512 anyway, barely notice.
+
+## Paths
+
+The shell scripts here take three values from the environment rather than carrying one machine's
+drives: `LAB_PY` (the interpreter), `LAB_MODELS` (where models go), `LAB_SETS` (where image sets
+live). Copy `paths.local.sh.example` to `paths.local.sh` to set them once; that file is not tracked.
+
 ## style_ca.py → `graphics:NeuralCA`
 
 A neural cellular automaton trained on the style of a folder of images. Twelve channels, one hidden
@@ -395,3 +436,136 @@ rather than reading `categories.py`'s cache: that is another CLIP, and its numbe
 The space remembers its `--preset`, so a sheet is drawn with the adapter it was built for.
 `--style-only` (SDXL) steers only the block that carries style, so a reference's layout does not
 come with its surface — for textures that seldom matters, for anything with a composition it does.
+
+## caption.py — a word per image, not a word per folder
+
+```bash
+python caption.py --images ~/pictures/set --detail 3 --sample 16 --contact check.png
+python caption.py --images ~/pictures/set --detail 3 --write
+```
+
+A category word is a blunt caption. Every rock in a set trained on `rock` teaches the average of all
+of them, and the LoRA that came out drew lichen as beaded confetti — worse than the base model. This
+describes each image instead: CLIP scores three vocabularies separately, what the material IS, how
+its surface behaves and what light it sits in, and the colours are named from the pixels by
+clustering in CIELAB against a palette of 44.
+
+Over 2,133 images that gives 1,931 distinct captions from 59 materials and 106 surface terms, and
+the confetti goes away. `--sample` previews without writing; `--contact` draws the crops with their
+captions beneath, which is the only way to see that a material is wrong.
+
+Two things the colours needed. The crops really are darker and less saturated than a thumbnail
+suggests, so a caption that reads too grey is usually right — check a contact sheet before tuning.
+And the palette needed the muted middle: saturated hues around a grey axis sent a tan stream to
+"ash grey" and beige paper to "chocolate" until `taupe`, `pewter`, `driftwood` and the rest existed.
+The dominant colour stays weighted by chroma, because naming the largest cluster instead sent golden
+water to "charcoal" and foliage to "olive drab".
+
+## compare.py — choose a checkpoint by holding the seed still
+
+```bash
+python compare.py --lora "2000=run/step-002000@1.4" "4000=run/step-004000@1.4" --out compare.png
+```
+
+Picking a LoRA from its own sheet does not work: every sheet is drawn from different noise, so the
+checkpoint that lands a good seed looks like the better model. This holds the prompt and the seed
+and changes only the LoRA, which is the only arrangement where what differs on screen is the thing
+being measured. A trailing `@1.4` sets how hard each one is applied.
+
+**A LoRA's training loss does not say when to stop.** One run held a normal 0.02 to 0.24 band
+through 3,000 steps while the pictures blurred to mush; the peak was step 1,000. Noise-prediction
+error at a small batch is dominated by which timestep was drawn, not by whether the picture holds
+together, so always save numbered checkpoints and choose between them here.
+
+Steps and strength trade as a product, so neither can be read with the other held fixed. Blur begins
+around `steps x strength ~ 4800`: 2,000 at 1.6 and 3,000 at 1.0 are indistinguishable, and 4,000 at
+1.6 is mush. Prefer the earlier checkpoint at a higher strength — it has somewhere left to travel,
+which matters if the strength is going to be driven by a signal.
+
+## terms.py — knobs built from what the captions say
+
+```bash
+python terms.py --space set-ip.npz --list
+python terms.py --space set-ip.npz --image photo.jpg --term encrusted glassy --out sheet.png
+python terms.py --space set-ip.npz --image photo.jpg --preset "rock structure" --push 8 --out sheet.png
+```
+
+Prompting is a discrete interface: it works, but only if you reach for one of the material words the
+captions actually used — asking for "an old painted wall" draws a room with a lamp in it, because
+the trained phrase is "a close-up photograph of peeling paint". A knob needs no vocabulary, moves
+continuously, and can be driven by something that is not a keyboard.
+
+Categories make poor knobs here. The clustering says they are not really there — silhouette stays
+near 0.16 at every count from 3 to 16 — and the seven means then sit 0.43 to 0.66 apart in units of
+the spread *within* a category, so every knob drew the same grey. A caption term names a set of
+images directly, there are about 150 of them carried by enough images to use, they overlap on
+purpose, and they are words already in mind before anyone starts.
+
+Two numbers decide whether a knob points anywhere:
+
+- `--push` exaggerates a mean away from the centre of the space, keeping what distinguishes a term
+  and dropping what every texture shares. A single term wants 3. **A mix wants 8**, because
+  averaging terms lands between them and between is nearer the centre: at push 3 the ten presets sit
+  16.8 apart where single terms sit 21.5, and push 8 brings them to 25.8.
+- `--scale` is the adapter's own strength, and the knob a hand or a signal actually turns. A weight
+  in a mix sets proportion and never intensity — the rescale divides any shared factor back out, so
+  `cat1=0.4` alone and `cat1=1` alone are the same place.
+
+`presets.json` holds named mixes, which is how a high-level idea gets an entry point without
+imposing a boundary: a preset names a point you then slide away from. A term no caption carries is
+dropped with a warning, so a preset written against one set stays mostly right on the next.
+
+## knobs.py — the same, by category rather than by term
+
+```bash
+python knobs.py --space set-ip.npz --image photo.jpg --mix cat1=1 --push 3 --scale 0.9 --out turned.png
+```
+
+Older and blunter than `terms.py`, kept for a space whose folders mean something. `--mix` chooses
+which categories and in what proportion, `--scale` how much, `--strength` how much of the source is
+redrawn at all, `--push` how far a category is exaggerated. Prefer `terms.py` unless the categories
+are real.
+
+## restyle.py — carry a picture that is not in the set into its look
+
+```bash
+python restyle.py --image photo.jpg --lora "mine=run/step-002000@1.6" --bare --out restyled.png
+```
+
+The LoRA and the space both answer "draw me something new". This answers a different question: take
+a picture that already exists and carry it toward the set without losing what it is. That is img2img,
+and it turns on one number — denoising strength, how much of the original is thrown away before
+redrawing.
+
+How far a picture can travel depends on whether it has surface. A portrait at 0.3 becomes carved
+weathered stone and is still recognisably the same person; by 0.6 it is a lichen-covered relief. A
+building survives to 0.75 because its geometry is hard, while a landscape of soft gradients has
+dissolved into rock by 0.6, and a room with depth and furniture loses itself first. The number is
+not guessable per picture, so the sweep is drawn and the eye picks.
+
+Given several LoRAs it draws them as columns, with `--bare` adding the prompt alone. That column
+matters more than expected: at a gentle strength every LoRA looks like no LoRA at all, and the
+differences only appear when pushed.
+
+## grow.py — twice the resolution, keeping what is already known
+
+```bash
+python grow.py --from run/textures.pt --out grown1024.pt
+python fastgan.py --images set --classes --size 1024 --init grown1024.pt --fade 20000
+```
+
+A 1024 run from nothing collapsed before its first snapshot and 94,000 more steps never brought it
+back. Carrying the generator alone does not fix it either — a trained generator against a fresh
+critic is its own way to collapse — so both networks come across and only what the new resolution
+adds starts from zero. It refuses to write unless the grown generator reproduces the old one
+upsampled, which is the proof that no layer landed in the wrong place.
+
+## separable.py — is a category learnable at all?
+
+```bash
+python separable.py --images ~/pictures/set-by-category
+```
+
+Crops the way the trainer crops, embeds with DINOv2, and fits a linear probe per category pair.
+Run it before blaming a model for merging two categories: if a probe cannot tell them apart on the
+same crops, nothing downstream will either, and the fix is the set rather than the training.

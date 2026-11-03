@@ -1,0 +1,34 @@
+/* The hidden tab's own, beside the tabs' shared page (studio.css): one slider from hidden to plain,
+   the ways as tiles drawn from the pair, and the stage's squint. */
+#wayCard>.lab{display:flex;justify-content:space-between;align-items:baseline}
+#wayCard>.lab .hintline{letter-spacing:0;text-transform:none;font-family:var(--sans)}
+#tiles{display:flex;flex-direction:column;gap:4px}
+#tiles .kind{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:4px}
+#tiles .row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+.mtile{display:flex;flex-direction:column;gap:3px;padding:3px;background:none;border:1px solid var(--edge);border-radius:6px;text-align:left}
+.mtile img{width:100%;aspect-ratio:3/2;object-fit:cover;border-radius:3px;display:block;background:var(--raise)}
+.mtile img:not([src]){visibility:hidden}
+.mtile span{font-size:10.5px;color:var(--dim);padding:0 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mtile.waiting img{opacity:.45}
+.mtile:hover{border-color:var(--gold)}
+.mtile[aria-pressed="true"]{border-color:var(--gold);background:color-mix(in srgb,var(--gold) 12%,transparent)}
+.mtile[aria-pressed="true"] span{color:var(--gold)}
+#wayDoc{border-left:2px solid var(--gold);padding-left:9px}
+
+.vis{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;
+     font-family:var(--mono);font-size:11px;color:var(--dim)}
+.vis input{width:100%;accent-color:var(--gold)}
+#visNote{font-family:var(--mono);font-size:11px}
+
+.words{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:center;font-size:12px;color:var(--dim)}
+.words input{min-width:0}
+.words[hidden]{display:none}
+#pairLinks .link{font-size:inherit}
+#sizeSeg button{padding:4px 6px}
+
+/* squint: every picture blurred, the way a hidden face is found from across a room */
+#stageBox.squint #after,#stageBox.squint #before,#stageBox.squint #stillImg,#tiles.squint img{filter:blur(7px) saturate(1.1)}
+#peek{touch-action:none;user-select:none}
+#viewbar .toggle[aria-pressed="true"]{color:var(--gold);border-color:var(--gold)}
+/* the drag handle stays on the picture when the face is fully hidden or fully shown */
+#compare .grip{left:clamp(34px,var(--x),calc(100% - 34px))}

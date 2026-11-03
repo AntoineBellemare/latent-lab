@@ -1,0 +1,65 @@
+{
+  "_": "The flagships the lab loads, by path relative to the models folder (LAB_MODELS). Each GAN here is byte-identical to its published copy on Kairos-Hive/goofi-textures, checked by sha256 on 2026-10-25. Category names were read off each training folder's own captions — the dominant materials per cat folder — so a slider says what it pulls toward.",
+  "gans": [
+    {
+      "key": "gan 512",
+      "file": "conditional-twophase/textures-raw-best.onnx",
+      "published": "gan/conditional-512.onnx",
+      "doc": "the September flagship: conditional FastGAN, 512px, four-star set, 28 strong axes",
+      "categories": [
+        "still water",
+        "lichen & vein",
+        "waves",
+        "encrusted rock",
+        "peeling paint",
+        "bark & foliage",
+        "light & frost"
+      ]
+    },
+    {
+      "key": "gan 1024",
+      "file": "fade1024/textures-raw-best.onnx",
+      "published": "gan/grown-1024.onnx",
+      "doc": "the 512 flagship grown to 1024 by grow.py and a 20k-step fade — same categories, twice the grain",
+      "categories": [
+        "still water",
+        "lichen & vein",
+        "waves",
+        "encrusted rock",
+        "peeling paint",
+        "bark & foliage",
+        "light & frost"
+      ]
+    },
+    {
+      "key": "gan yellow3",
+      "file": "gan-yellow3/textures.onnx",
+      "published": "gan/conditional-512-yellow3.onnx",
+      "doc": "512px on the wider three-star set (4,345 frames): more data, softer category boundaries",
+      "categories": [
+        "still water",
+        "waves",
+        "lichen & copper",
+        "barnacle & seaweed",
+        "mineral rock",
+        "light & frost",
+        "foliage"
+      ]
+    },
+    {
+      "key": "gan looks",
+      "file": "gan-looks/looks-best.onnx",
+      "looks": true,
+      "doc": "trained on the material space itself (fastgan.py --look): any mix of up to four materials — presets, your photographs, archive photographs — drawn live at 512 px",
+      "categories": []
+    }
+  ],
+  "rae": "rae/ViTXL_n08_i512/model.pt",
+  "upscale": "esrgan/RealESRGAN_x4plus.pth",
+  "tokendit": "tokendit",
+  "rae256": "rae/ViTXL_n08/model.pt",
+  "lora_keepers": [
+    "sd15-lora-yellow/step-002000",
+    "sd15-lora-gentle/step-002000"
+  ]
+}

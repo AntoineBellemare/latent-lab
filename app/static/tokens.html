@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tokens</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@1,6..72,500&family=IBM+Plex+Sans:wght@350;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="studio.css">
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body class="studio">
+<header id="top">
+  <h1>Latent Lab
+    <nav class="tabs" aria-label="pages"><a href="/">lab</a><a href="/editor.html">editor</a><a href="/mapping.html">mapping</a><a href="/hidden.html">hidden</a><a href="/tokens.html" aria-current="page">tokens</a></nav>
+  </h1>
+  <div class="toprow"><div id="jobsLight" title="queue">·</div></div>
+</header>
+<div id="studio">
+  <section id="view"></section>
+  <aside id="controls">
+    <div class="card" id="inputsCard">
+      <div class="lab">picture and materials</div>
+      <div id="slots"></div>
+    </div>
+
+    <div class="card" id="wayCard">
+      <div class="lab">way <span class="hintline">each one on your own inputs</span></div>
+      <div id="tiles"></div>
+      <div id="wayDoc" class="hintline"></div>
+      <div id="dial"></div>
+      <details class="fold" id="tuneBox">
+        <summary>fine-tune <span class="sum"></span></summary>
+        <div id="knobs" class="args"></div>
+      </details>
+    </div>
+
+    <div class="card" id="whereCard"><div class="lab">where <span class="hintline">in the picture</span></div><div id="where"></div></div>
+
+    <div id="go">
+      <div class="row"><span class="k">size</span><div class="seg small grow" id="sizeSeg" role="group" aria-label="working size"></div></div>
+      <div class="row" id="frameRow"><span class="k">frame</span><div class="seg small grow" id="frameSeg" role="group" aria-label="frame"></div></div>
+      <div class="row" id="enlargeRow"></div>
+      <div class="row">
+        <button id="keep" class="primary" title="keep this frame: it goes in the history (K)">keep</button>
+        <button id="surprise" title="nine random recipes from your materials, side by side: click one to go on from it (R)">surprise ×9</button>
+      </div>
+      <div class="row">
+        <button id="vary" title="one thing changed across several renders, side by side">vary…</button>
+        <button id="export" title="render and enlarge four times: 3072 on the long side from 768">export</button>
+        <button id="recipe" title="save these settings as a lab recipe">save recipe</button>
+      </div>
+    </div>
+  </aside>
+</div>
+<script type="module" src="tokens.js"></script>
+</body>
+</html>

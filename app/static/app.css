@@ -1,0 +1,180 @@
+/* Latent Lab's skin: dark ground, mono labels, one gold accent; panels generated, nothing precious. */
+:root{
+  --ground:#0b0e11; --surface:#12171d; --raise:#161d24; --edge:#222c34; --edge2:#2d3942;
+  --ink:#e2e6e1; --dim:#97a3ab; --faint:#64707a; --gold:#c9a455; --water:#7fb5d4; --bad:#c97a6a;
+  --sans:'IBM Plex Sans',system-ui,sans-serif; --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --serif:'Newsreader',Georgia,serif;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:14px;
+line-height:1.5;font-weight:350;-webkit-font-smoothing:antialiased;display:flex;flex-direction:column}
+header#top{display:flex;align-items:center;justify-content:space-between;gap:14px;
+padding:10px 18px;border-bottom:1px solid var(--edge)}
+#top h1{font-family:var(--serif);font-style:italic;font-weight:500;font-size:20px;margin:0}
+#top h1 span{font-family:var(--mono);font-style:normal;font-size:11px;color:var(--gold);
+border:1px solid var(--edge2);border-radius:99px;padding:3px 10px;margin-left:10px;vertical-align:2px}
+/* The pages: the lab and the material editor, as tabs in the header. */
+.tabs{display:inline-flex;gap:2px;margin-left:16px;vertical-align:3px}
+.tabs a{font-family:var(--mono);font-style:normal;font-size:12px;color:var(--dim);text-decoration:none;
+padding:4px 11px;border:1px solid transparent;border-radius:99px}
+.tabs a:hover{color:var(--ink);border-color:var(--edge2)}
+.tabs a[aria-current="page"]{color:#14110a;background:var(--gold);border-color:var(--gold)}
+
+#jobsLight{font-family:var(--mono);font-size:12px;color:var(--faint)}
+#jobsLight.busy{color:var(--gold)}
+main{flex:1;display:grid;grid-template-columns:200px minmax(0,1fr) 360px;min-height:0}
+nav#rail{display:flex;flex-direction:column;gap:2px;padding:12px 10px;border-right:1px solid var(--edge);
+overflow-y:auto}
+#rail .fam{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+color:var(--faint);margin:12px 6px 4px}
+#rail .fam:first-child{margin-top:0}
+#rail button{font-family:var(--mono);font-size:12.5px;text-align:left;background:none;color:var(--dim);
+border:1px solid transparent;border-radius:5px;padding:6px 9px;cursor:pointer;white-space:nowrap}
+#rail button:hover{color:var(--ink);border-color:var(--edge2)}
+#rail button[aria-pressed="true"]{color:var(--gold);border-color:var(--gold);background:var(--surface)}
+#rail .cost{float:right;opacity:.55;font-size:10px;margin-left:8px}
+section#stage{display:flex;flex-direction:column;min-width:0;min-height:0;padding:14px}
+#viewerWrap{flex:1;display:flex;gap:12px;min-height:0;align-items:stretch;justify-content:center}
+#viewer,#holdPane{position:relative;background:var(--surface);border:1px solid var(--edge);
+border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;flex:1;min-width:0}
+/* The canvas is sized by script to the largest square the pane holds, and placed out of flow so
+   its size can never feed back into the pane's. Every frame is scaled to it, whatever its pixels. */
+#viewer canvas,#holdPane canvas{position:absolute;inset:0;margin:auto;display:block;border-radius:4px}
+#viewer.busy::after{content:'';position:absolute;inset:0;box-shadow:inset 0 0 0 2px var(--gold);opacity:.4}
+#note{position:absolute;left:0;right:0;bottom:0;padding:5px 10px;font-family:var(--mono);font-size:11px;
+color:var(--dim);background:color-mix(in srgb,var(--ground) 82%,transparent)}
+#holdPane button{position:absolute;top:6px;right:6px;z-index:2}
+#note a{color:var(--gold);text-decoration:none;border-bottom:1px solid var(--gold)}
+#strip{display:flex;gap:8px;overflow-x:auto;padding:12px 2px 2px;min-height:76px}
+#strip img{height:64px;width:64px;object-fit:cover;border-radius:5px;border:1px solid var(--edge);
+cursor:pointer;flex:0 0 auto}
+#strip img.sel{border-color:var(--gold)}
+aside#panel{border-left:1px solid var(--edge);padding:12px 14px 0;overflow-y:auto;display:flex;
+flex-direction:column;gap:10px}
+/* The method in two lines; a click shows the rest. */
+#methodDoc{font-size:12.5px;color:var(--dim);border-left:2px solid var(--gold);padding-left:10px;cursor:pointer;
+display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;flex:none}
+#methodDoc.full{display:block}
+.lab{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
+.block{display:flex;flex-direction:column;gap:7px;background:var(--surface);border:1px solid var(--edge);
+border-radius:7px;padding:10px 12px}
+.block>.lab{color:var(--gold)}
+select,input[type=text],input[type=number]{font-family:var(--mono);font-size:12px;background:var(--raise);
+color:var(--ink);border:1px solid var(--edge2);border-radius:4px;padding:6px 8px;max-width:100%;min-width:0}
+button{font-family:var(--mono);font-size:12px;background:var(--raise);color:var(--ink);
+border:1px solid var(--edge2);border-radius:4px;padding:6px 11px;cursor:pointer}
+button:hover{border-color:var(--gold);color:var(--gold)}
+button.primary{background:var(--gold);color:#14110a;border-color:var(--gold);font-weight:500}
+button[aria-pressed="true"]{background:var(--gold);color:#14110a;border-color:var(--gold)}
+.knob{display:grid;grid-template-columns:104px 1fr 44px;gap:8px;align-items:center}
+.knob .wide{grid-column:2 / 4}
+.knob .k{font-family:var(--mono);font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis}
+.knob output{font-family:var(--mono);font-size:11px;color:var(--dim);text-align:right;font-variant-numeric:tabular-nums}
+.knob input[type=range]{width:100%;accent-color:var(--gold);height:18px;margin:0}
+/* What a setting does is said in the help line above render; 'explanations' in the header also
+   writes it under every setting. */
+.khint,.gdoc{display:none}
+body.explain .khint,body.explain .gdoc{display:block}
+.khint{font-size:11.5px;color:var(--faint);line-height:1.4}
+.gdoc{font-size:12px;color:var(--dim);line-height:1.4;margin-bottom:2px}
+#top .toprow{display:flex;gap:12px;align-items:center}
+#explain{padding:3px 10px;font-size:11px}
+#methodDoc b{color:var(--ink);font-weight:500;font-family:var(--mono);font-size:12px}
+/* The inputs: a row each, the material's extras behind its "more". */
+#inputs{display:flex;flex-direction:column;gap:10px}
+.input{display:flex;flex-direction:column;gap:6px}
+.inhead{display:flex;gap:10px;align-items:baseline;min-width:0}
+.inhead .lab{color:var(--gold);flex:none}
+.insum{font-family:var(--mono);font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;
+white-space:nowrap;min-width:0}
+.inprev{display:flex;gap:6px;align-items:center}
+.inprev img{width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid var(--edge);flex:none}
+.inprev select{flex:1}
+button.icon{padding:5px 8px;flex:none}
+/* A switch between inputs (the editor's swatch): one row of buttons, the chosen one lit. */
+.seg{display:flex}
+.seg button{flex:1;border-radius:0;margin-left:-1px}
+.seg button:first-child{border-radius:4px 0 0 4px;margin-left:0}
+.seg button:last-child{border-radius:0 4px 4px 0}
+.matbox{display:flex;flex-direction:column;gap:6px}
+.matbox>.more{display:flex;flex-direction:column;gap:6px;padding-left:10px;border-left:1px solid var(--edge2)}
+.chips{display:flex;gap:5px;flex-wrap:wrap}
+.chips button{padding:4px 9px;font-size:11px}
+.runrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.auto{font-family:var(--mono);font-size:11.5px;color:var(--dim);display:flex;gap:5px;align-items:center}
+#drawer{position:fixed;inset:0;background:color-mix(in srgb,var(--ground) 72%,transparent);z-index:40;
+display:flex;align-items:flex-end;justify-content:center}
+#drawerCard{background:var(--surface);border:1px solid var(--edge2);border-radius:12px 12px 0 0;
+width:min(1060px,100%);max-height:78vh;padding:14px;display:flex;flex-direction:column;gap:10px}
+#drawerCard .runrow input[type=text]{flex:1;min-width:160px}
+#agrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px;overflow-y:auto}
+#agrid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:4px;cursor:pointer;
+border:1px solid transparent;display:block}
+#agrid img:hover{border-color:var(--gold)}
+#recipes{display:flex;gap:6px;align-items:center}
+#recipes select{max-width:260px;padding:3px 6px;font-size:11px}
+#recipes button{padding:3px 8px;font-size:11px}
+/* Points clicked on the picture for a mask layer; shown while the picture is armed. */
+#marks{position:absolute;inset:0;margin:auto;pointer-events:none}
+.mark{position:absolute;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;border:2px solid var(--gold);background:color-mix(in srgb,var(--gold) 45%,transparent);font-family:var(--mono);font-size:10px;color:#14110a;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 1px rgba(0,0,0,.5)}
+.mark.out{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 45%,transparent)}
+#viewer.picking canvas{cursor:crosshair}
+#viewer.picking{box-shadow:inset 0 0 0 1px var(--gold)}
+.pointtools{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.pointtools button{padding:3px 8px;font-size:11px}
+.pcount{font-family:var(--mono);font-size:11px;color:var(--dim)}
+/* A section of settings: a rule and a heading that folds it. Folded, the heading says what in it is
+   set; the mask's extra layers, gradient and edges sit inside it, indented. */
+#params{display:flex;flex-direction:column}
+.section{border-top:1px solid var(--edge)}
+.sechead{display:flex;gap:10px;align-items:baseline;width:100%;background:none;border:none;border-radius:0;
+padding:9px 0;text-align:left}
+.sechead:hover{border:none}
+.sechead .t{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);flex:none}
+.sechead:hover .t{color:var(--ink)}
+.sechead .sum{font-family:var(--mono);font-size:11px;color:var(--dim);flex:1;min-width:0;overflow:hidden;
+text-overflow:ellipsis;white-space:nowrap;text-align:right}
+.section:not(.folded)>.sechead .sum{visibility:hidden}
+.sechead::after{content:'\25BE';color:var(--faint);font-size:11px;flex:none}
+.folded>.sechead::after{content:'\25B8'}
+.secbody{display:flex;flex-direction:column;gap:7px;padding:0 0 10px}
+.folded>.secbody{display:none}
+.secbody>.main,.secbody>.more{display:flex;flex-direction:column;gap:7px}
+.morebtn{align-self:flex-start;background:none;border:none;padding:0;font-size:11px;color:var(--faint)}
+.morebtn:hover{color:var(--gold);border:none}
+.subs{display:flex;flex-direction:column}
+.section.sub{border-top:none;border-left:1px solid var(--edge2);padding-left:10px;margin-top:2px}
+.section.sub>.sechead{padding:5px 0}
+.section.sub>.sechead .t{color:var(--dim)}
+.ctl{display:flex;flex-direction:column;gap:2px}
+/* The help line and the actions stay in reach however long the panel grows. */
+#foot{position:sticky;bottom:0;z-index:3;background:var(--ground);margin:auto -14px 0;padding:8px 14px 12px;
+border-top:1px solid var(--edge);display:flex;flex-direction:column;gap:8px}
+#help{font-size:12px;color:var(--dim);line-height:1.4;height:4.2em;overflow:hidden}
+.modes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+.modes button{padding:5px 6px;font-size:11.5px;overflow:hidden;text-overflow:ellipsis}
+.xypad{position:relative;aspect-ratio:1;max-width:220px;width:100%;margin:4px 0 6px;
+background:var(--raise);border:1px solid var(--edge2);border-radius:6px;cursor:crosshair;touch-action:none;
+background-image:linear-gradient(var(--edge),var(--edge)),linear-gradient(var(--edge),var(--edge));
+background-size:1px 100%,100% 1px;background-position:center;background-repeat:no-repeat}
+.xydot{position:absolute;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;
+border:2px solid var(--gold);background:color-mix(in srgb,var(--gold) 30%,transparent);pointer-events:none}
+.err{color:var(--bad)}
+
+.jobrow{display:flex;gap:8px;align-items:center;font-family:var(--mono);font-size:11px;padding:3px 0;
+border-bottom:1px solid var(--edge)}
+.jobrow:last-child{border-bottom:none}
+.jobrow .jl{color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.jobrow .js{color:var(--dim);white-space:nowrap}
+.jobrow .js.err{color:var(--bad)}
+.jobrow a{color:var(--gold);text-decoration:none;border-bottom:1px solid var(--gold);white-space:nowrap}
+.jobrow button{padding:2px 7px;font-size:10.5px}
+#jobsList{max-height:220px;overflow-y:auto}
+/* A narrow window: rail as a row on top, the picture, then the panel. Last, so it wins. */
+@media(max-width:980px){main{grid-template-columns:1fr;overflow:auto}
+  nav#rail{flex-direction:row;align-items:center;overflow-x:auto;border-right:none;border-bottom:1px solid var(--edge)}
+  #rail .fam{margin:0 4px 0 10px;white-space:nowrap}
+  section#stage{min-height:62vh}
+  aside#panel{border-left:none;border-top:1px solid var(--edge);overflow:visible}}

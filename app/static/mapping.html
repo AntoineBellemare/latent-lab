@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Texture Mapping</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@1,6..72,500&family=IBM+Plex+Sans:wght@350;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="studio.css">
+<link rel="stylesheet" href="mapping.css">
+</head>
+<body class="studio">
+<header id="top">
+  <h1>Latent Lab
+    <nav class="tabs" aria-label="pages"><a href="/">lab</a><a href="/editor.html">editor</a><a href="/mapping.html" aria-current="page">mapping</a><a href="/hidden.html">hidden</a><a href="/tokens.html">tokens</a></nav>
+  </h1>
+  <div class="toprow"><div id="jobsLight" title="queue">·</div></div>
+</header>
+<div id="studio">
+  <section id="view"></section>
+  <aside id="controls">
+    <div class="card" id="inputsCard"><div class="lab">picture and texture</div></div>
+
+    <div class="card" id="modeCard">
+      <div class="lab">mode <span class="hintline" id="tilesNote">each one on your pair</span></div>
+      <div id="tiles"></div>
+      <div id="modeDoc" class="hintline"></div>
+      <div id="knobs" class="args"></div>
+    </div>
+
+    <div class="card" id="whereCard"><div class="lab">where</div><div id="where"></div></div>
+
+    <div class="card" id="strengthCard">
+      <div class="lab">strength</div>
+      <div id="sliders" class="args"></div>
+    </div>
+
+    <div class="card">
+      <details class="fold" id="surfaceBox">
+        <summary>on the forms <span class="sum"></span></summary>
+        <div class="hintline">the picture's own light laid over the material, and the material curved over its forms, instead of printed flat across the frame</div>
+        <div id="surface" class="args"></div>
+      </details>
+    </div>
+
+    <div id="go">
+      <div class="row"><span class="k">size</span><div class="seg small grow" id="sizeSeg" role="group" aria-label="working size"></div></div>
+      <div class="row">
+        <button id="keep" class="primary" title="keep this frame: it goes in the history (K)">keep</button>
+        <button id="vary" title="one thing changed across several renders, side by side">vary…</button>
+      </div>
+      <div class="row">
+        <button id="export" title="render at the picture's own full resolution">export full size</button>
+        <button id="recipe" title="save these settings as a lab recipe">save recipe</button>
+      </div>
+      <div class="row"><button id="flip" class="quiet" title="the same pair in the hidden tab: the texture leads, and the picture hides in it">hide the picture in the texture →</button></div>
+    </div>
+  </aside>
+</div>
+<script type="module" src="mapping.js"></script>
+</body>
+</html>

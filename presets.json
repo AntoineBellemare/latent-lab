@@ -59,5 +59,39 @@
     "a mineral vein": 0.7,
     "banded": 0.5,
     "striated": 0.3
+  },
+  "golden light": {
+    "a sheet of light": 1.0,
+    "a sunlit surface": 0.7,
+    "gold": 0.5,
+    "glassy": 0.3
+  },
+  "sea foam": {
+    "sea foam": 1.0,
+    "foamy": 0.8,
+    "froth and bubbles": 0.6,
+    "a breaking wave": 0.3
+  },
+  "frost": {
+    "melting snow": 1.0,
+    "frosted glass": 0.7,
+    "crystalline": 0.4,
+    "pale grey": 0.3
+  },
+  "autumn foliage": {
+    "foliage": 1.0,
+    "fallen leaves": 0.7,
+    "moss green": 0.4
+  },
+  "silt and clay": {
+    "silt": 1.0,
+    "dried mud": 0.6,
+    "clay": 0.5,
+    "sand": 0.4
+  },
+  "submerged stones": {
+    "a shallow stream over stones": 1.0,
+    "submerged under clear water": 0.7,
+    "pebbled": 0.4
   }
 }

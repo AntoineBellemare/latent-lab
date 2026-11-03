@@ -1,0 +1,7 @@
+/* The editor's own, beside the tabs' shared page (studio.css): the instruction box, and the render
+   bar's quality switch and seed. */
+textarea#prompt{font-family:var(--sans);font-size:12.5px;line-height:1.45;background:var(--raise);color:var(--ink);
+border:1px solid var(--edge2);border-radius:4px;padding:7px 9px;resize:vertical;width:100%}
+textarea#prompt::placeholder{color:var(--faint)}
+#go #qualitySeg{flex:none}
+#go #seed{width:78px}

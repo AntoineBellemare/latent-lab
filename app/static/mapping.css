@@ -1,0 +1,17 @@
+/* Texture mapping's own, beside the tabs' shared page (studio.css): the modes as tiles drawn from
+   the pair, in three kinds. */
+#modeCard>.lab{display:flex;justify-content:space-between;align-items:baseline}
+#modeCard>.lab .hintline{letter-spacing:0;text-transform:none;font-family:var(--sans)}
+#tiles{display:flex;flex-direction:column;gap:4px}
+#tiles .kind{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:4px}
+#tiles .row3{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
+.mtile{display:flex;flex-direction:column;gap:3px;padding:3px;background:none;border:1px solid var(--edge);border-radius:6px;text-align:left}
+.mtile img{width:100%;aspect-ratio:3/2;object-fit:cover;border-radius:3px;display:block;background:var(--raise)}
+.mtile img:not([src]){visibility:hidden}
+.mtile span{font-size:10.5px;color:var(--dim);padding:0 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mtile.waiting img{opacity:.45}
+.mtile:hover{border-color:var(--gold)}
+.mtile[aria-pressed="true"]{border-color:var(--gold);background:color-mix(in srgb,var(--gold) 12%,transparent)}
+.mtile[aria-pressed="true"] span{color:var(--gold)}
+#modeDoc{border-left:2px solid var(--gold);padding-left:9px}
+#sizeSeg button{padding:4px 6px}

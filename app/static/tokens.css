@@ -1,0 +1,34 @@
+/* The tokens tab's own, beside the tabs' shared page (studio.css): a picture and a palette of three
+   materials, the ways as tiles drawn from them in two kinds, and the dial under them. */
+#slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+#slots .drop{position:relative;min-width:0}
+#slots .drop.picslot{grid-column:1/-1}
+/* the materials as three swatches in a row: the photograph, its name, and "choose…" */
+#slots .drop:not(.picslot){flex-direction:column;align-items:stretch;gap:4px;padding:4px}
+#slots .drop:not(.picslot) img{width:100%;height:auto;aspect-ratio:3/2}
+#slots .drop:not(.picslot) b{font-size:10.5px}
+#slots .drop:not(.picslot) span{font-size:0}
+#slots .drop:not(.picslot) span .link{font-size:11px}
+#slots .drop.unused{opacity:.45}
+#slots .drop.empty img{visibility:hidden}
+#slots .drop.empty b{color:var(--faint);font-weight:400}
+#slots .drop .clear{position:absolute;top:2px;right:2px;padding:0 6px;line-height:18px;font-size:13px}
+#wayCard>.lab{display:flex;justify-content:space-between;align-items:baseline}
+#wayCard>.lab .hintline{letter-spacing:0;text-transform:none;font-family:var(--sans)}
+#tiles{display:flex;flex-direction:column;gap:4px}
+#tiles .kind{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:4px}
+#tiles .row3{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
+.mtile{display:flex;flex-direction:column;gap:3px;padding:3px;background:none;border:1px solid var(--edge);border-radius:6px;text-align:left}
+.mtile img{width:100%;aspect-ratio:3/2;object-fit:cover;border-radius:3px;display:block;background:var(--raise)}
+.mtile img:not([src]){visibility:hidden}
+.mtile span{font-size:10.5px;color:var(--dim);padding:0 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mtile.waiting img{opacity:.45}
+.mtile:hover{border-color:var(--gold)}
+.mtile[aria-pressed="true"]{border-color:var(--gold);background:color-mix(in srgb,var(--gold) 12%,transparent)}
+.mtile[aria-pressed="true"] span{color:var(--gold)}
+#wayDoc{border-left:2px solid var(--gold);padding-left:9px}
+#dial{padding:4px 0 2px}
+#dial .slide{grid-template-columns:118px 1fr 48px}
+#dial .slide .k{color:var(--gold)}
+#sizeSeg button,#frameSeg button{padding:4px 6px}
+#slots .drop.empty .clear{display:none}

@@ -175,6 +175,12 @@ def main():
     ap.add_argument("--save-every", type=int, default=1000, help="Write the LoRA this often; 0 only at the end.")
     ap.add_argument("--sample-steps", type=int, default=2, help="Denoising steps for the sheet it draws at the end.")
     ap.add_argument("--guidance", type=float, default=0.0, help="Guidance for the sheet: 0 for turbo bases, ~5 otherwise.")
+    ap.add_argument("--precision", choices=["fp16", "bf16"], default="fp16",
+                    help="The frozen model's precision on a GPU. bf16 has fp32's range: SDXL trained in fp16 can "
+                         "overflow and drift until it draws black (seen at 1024: fine at step 500, gone by 2500).")
+    ap.add_argument("--checkpointing", action="store_true",
+                    help="Recompute the UNet's activations in the backward pass: SDXL at 1024 fits a 24 GB card "
+                         "this way, for about a third more time per step.")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
 
@@ -184,7 +190,8 @@ def main():
     from peft.utils import get_peft_model_state_dict
 
     device = torch.device(args.device)
-    frozen = torch.float16 if device.type == "cuda" else torch.float32
+    frozen = ({"fp16": torch.float16, "bf16": torch.bfloat16}[args.precision] if device.type == "cuda"
+              else torch.float32)
     pipe = AutoPipelineForText2Image.from_pretrained(args.model, torch_dtype=frozen, safety_checker=None)
     pipe.to(device)
     xl = getattr(pipe, "text_encoder_2", None) is not None
@@ -200,6 +207,9 @@ def main():
     trained = [q for q in unet.parameters() if q.requires_grad]
     for q in trained:
         q.data = q.data.float()
+    if args.checkpointing:
+        unet.enable_gradient_checkpointing()
+        unet.train()  # checkpointing only recomputes in training mode
     print(f"{sum(q.numel() for q in trained) / 1e6:.2f}M trained parameters, rank {args.rank}, {'SDXL' if xl else 'SD'} base")
 
     files = images(args.images)
@@ -257,8 +267,15 @@ def main():
         got = unet(noisy, when, encoder_hidden_states=told, **extra).sample
         loss = F.mse_loss(got.float(), want.float())
         optimiser.zero_grad(set_to_none=True)
+        if not torch.isfinite(loss):
+            print(f"step {step:>6}  loss not finite, skipped", flush=True)
+            continue
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(trained, 1.0)
+        # One overflowed step would put inf into Adam's moments for good: a step whose gradients
+        # are not finite is dropped, not taken.
+        if not torch.isfinite(torch.nn.utils.clip_grad_norm_(trained, 1.0)):
+            print(f"step {step:>6}  gradient not finite, skipped", flush=True)
+            continue
         optimiser.step()
         if step % args.report == 0 or step == args.steps - 1:
             print(f"step {step:>6}  loss {loss.item():.5f}", flush=True)

@@ -2048,8 +2048,8 @@ def build(preset="sd15", root=None, manifest=None):
                         P("frame", "choice", "3:2", options=list(FRAMES), label="frame", group=OUT,
                           doc="the drawing's shape"),
                         P("long", "choice", 768, options=[512, 768, 1024], label="working size", group=OUT,
-                          choices={512: "21 x 32 tokens, about a second", 768: "32 x 48 tokens, about 3 s",
-                                   1024: "43 x 64 tokens, about 6 s"},
+                          choices={512: "21 x 32 tokens, 1.4 s (0.4 s dragging)", 768: "32 x 48 tokens, 2.7 s (0.8 s dragging)",
+                                   1024: "43 x 64 tokens, 6 to 9 s (1.7 s dragging)"},
                           doc="pixels on the long side the decoder draws (16 per token): a bigger drawing holds more "
                               "of the material at the same grain, in more of the generator's 16 x 16 windows"),
                         G(next(x for x in methods[-1]["params"] if x["key"] == "enlarge"), OUT)],

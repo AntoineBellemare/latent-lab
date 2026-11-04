@@ -548,6 +548,10 @@ seamless 3:2 texture, 2048 × 3072 enlarged, with forms larger than a window. Ex
 positions past the trained 16 instead holds at 16 × 24 and turns to brown mud at 32 × 48. A batch
 of 16 draws at 0.15 s each at 16 × 16, 0.28 s at 16 × 24, 2 s at 32 × 48 (30 steps, guidance 3).
 
+`tokendit.load` reads a training checkpoint (`ema-*.pt`) or the published half-precision
+`.safetensors` (`Kairos-Hive/latent-textures`, `tokens/`, with the channels' mean and spread inside),
+and the lab's `draw` takes either from its `tokendit` folder.
+
 `walk` films a closed loop through the most typical photographs of as many regions of the space,
 with the noise held, so one drawing changes material; paced by `flights.steady` (which now takes a
 batched `many`) to move as much from each frame to the next. The lab's `draw` method (tokens tab,

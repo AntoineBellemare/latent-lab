@@ -162,6 +162,27 @@ class TokenDiT(nn.Module):
         return self.out(self.final_norm(h) * (1 + scale) + shift)
 
 
+def load(path, device="cuda"):
+    """The generator from a training checkpoint (`ema-*.pt`) or from its published half-precision
+    `.safetensors`, which carries the channels' mean and spread as `_mean` and `_std` and the step in its
+    metadata: (model, mean, std, step)."""
+    path = pathlib.Path(path)
+    if path.suffix == ".safetensors":
+        from safetensors import safe_open
+        from safetensors.torch import load_file
+
+        ema = load_file(str(path))
+        mean, std = ema.pop("_mean"), ema.pop("_std")
+        with safe_open(str(path), "pt") as f:
+            step = int((f.metadata() or {}).get("step", 0))
+    else:
+        state = torch.load(path, map_location="cpu", weights_only=True)
+        ema, mean, std, step = state["ema"], state["mean"], state["std"], state["step"]
+    model = TokenDiT().to(device).eval()
+    model.load_state_dict({k: v.float() for k, v in ema.items()})
+    return model, mean.float().to(device), std.float().to(device), step
+
+
 def shifted(u):
     """A noise level on the latent's own scale: u in [0, 1] pushed toward noise by SHIFT."""
     return SHIFT * u / (1 + (SHIFT - 1) * u)
@@ -490,12 +511,10 @@ def main():
 
     import rae as R
 
-    state = torch.load(args.model, map_location="cuda", weights_only=True)
-    model = TokenDiT().cuda().eval()
-    model.load_state_dict(state["ema"])
+    model, mean, std, _ = load(args.model)
     rae = R.RAE(args.decoder)
     if args.cmd == "walk":
-        return walk(args, model, rae, state["mean"].cuda(), state["std"].cuda())
+        return walk(args, model, rae, mean, std)
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     places, names = None, ["no material"]
@@ -512,7 +531,7 @@ def main():
     gen = torch.Generator(device="cuda").manual_seed(args.seed)
     for k in range(len(names)):
         p = None if places is None else places[k:k + 1].expand(args.per, -1)
-        z = sample(model, p, args.steps, args.guide, gen, state["mean"].cuda(), state["std"].cuda(), args.per, args.grid)
+        z = sample(model, p, args.steps, args.guide, gen, mean, std, args.per, args.grid)
         for j, image in enumerate(rae.decode(R.renorm(z), args.grid)):
             if net is not None:
                 image = upscale.enlarge(net, image)

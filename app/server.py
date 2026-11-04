@@ -77,20 +77,17 @@ class LabEngine:
         return self._raes[decoder]
 
     def tokendit(self, folder):
-        """The token generator (tokendit.py) at its newest checkpoint in the folder, read again when a
-        training run still going writes a newer one: (checkpoint, model, mean, std, step)."""
-        import torch
-
+        """The token generator (tokendit.py) at its newest checkpoint in the folder (or its published
+        .safetensors), read again when a training run still going writes a newer one: (checkpoint, model,
+        mean, std, step)."""
         import tokendit
 
-        newest = max(pathlib.Path(folder).glob("ema-*.pt"))
+        newest = max(pathlib.Path(folder).glob("ema-*.pt"), default=None) or max(pathlib.Path(folder).glob("*.safetensors"))
         with self.loading:
             if self._tokendit is None or self._tokendit[0] != newest:
-                state = torch.load(newest, map_location=self.device, weights_only=True)
-                model = tokendit.TokenDiT().to(self.device).eval()
-                model.load_state_dict(state["ema"])
-                self._tokendit = (newest, model, state["mean"].to(self.device), state["std"].to(self.device), state["step"])
-                print(f"  tokendit up: step {state['step']}")
+                model, mean, std, step = tokendit.load(newest, self.device)
+                self._tokendit = (newest, model, mean, std, step)
+                print(f"  tokendit up: step {step}")
         return self._tokendit
 
     def enlarged(self, weights, image):

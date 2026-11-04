@@ -2062,7 +2062,7 @@ def build(preset="sd15", root=None, manifest=None):
             run=_hybrid_runner(files)))
         drawn = {k: manifest.get(k) for k in ("tokendit", "rae256")}
         if all(drawn.values()) and (pathlib.Path(root) / drawn["rae256"]).is_file() and \
-                any((pathlib.Path(root) / drawn["tokendit"]).glob("ema-*.pt")):
+                any(f for g in ("ema-*.pt", "*.safetensors") for f in (pathlib.Path(root) / drawn["tokendit"]).glob(g)):
             files = {**files, **{k: str(pathlib.Path(root) / f) for k, f in drawn.items()}}
             methods.append(dict(
                 key="draw", family="tokens", cost="seconds", export=True,

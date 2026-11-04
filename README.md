@@ -497,13 +497,13 @@ crops (a random 512 piece of each 576, flipped, encoded on the fly) and is steer
 material space: each crop's own place, or half the time its photograph's, with one in ten dropped
 for "no material" so guidance can push away from it. 196M parameters; a few hundred steps already
 give recognisable materials, coloured by the place asked for. Three hours at batch 32 (36,390 steps,
-loss 0.55 → 0.46) on one 3090.
+loss 0.59 at the first checkpoint, 0.46 at the end) on one 3090.
 
 It only ever saw 16 × 16 grids. Any other grid is drawn in overlapping 16 × 16 windows whose
 velocities are cross-faded at every step (`--grid`, and the lab's frame and size): each window sees
 positions it was trained on and neighbours agree on their overlaps, so a 32 × 48 grid comes out one
-seamless 3:2 texture, 2048 × 3072 enlarged, with forms larger than a window. Stretching the
-positions over the bigger grid instead holds at 16 × 24 and turns to brown mud at 32 × 48. A batch
+seamless 3:2 texture, 2048 × 3072 enlarged, with forms larger than a window. Extending the
+positions past the trained 16 instead holds at 16 × 24 and turns to brown mud at 32 × 48. A batch
 of 16 draws at 0.15 s each at 16 × 16, 0.28 s at 16 × 24, 2 s at 32 × 48 (30 steps, guidance 3).
 
 `walk` films a closed loop through the most typical photographs of as many regions of the space,

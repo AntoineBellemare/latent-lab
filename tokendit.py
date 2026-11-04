@@ -19,8 +19,8 @@ for a latent this size; 50 Euler steps to sample.
 It is trained on 16 x 16 grids only. Any other grid is drawn in overlapping 16 x 16 windows whose
 velocities are cross-faded at every step, so each window sees the positions it was trained on and
 neighbours agree where they overlap: a 32 x 48 grid (512 x 768, 2048 x 3072 enlarged) comes out one
-seamless texture with larger forms than a window holds. Stretching the positions over the bigger
-grid instead holds at 16 x 24 and turns to brown mud at 32 x 48.
+seamless texture with larger forms than a window holds. Extending the positions past the trained 16
+instead holds at 16 x 24 and turns to brown mud at 32 x 48.
 
 The condition is a place in the lab's material space (CLIP ViT-H, as `fastgan.py --look` takes it):
 each crop's own, or half the time its photograph's mean, so a preset, a photograph or any mix of

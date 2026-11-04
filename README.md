@@ -479,6 +479,48 @@ of it on one page: a picture and a palette of three materials, nine ways as tile
 dial per way with the rest under fine-tune, the lab's mask card for the ways on the picture, and
 "surprise", nine random recipes from the palette or from any texture, to go on from with a click.
 
+### raev2.py and bench_rae.py — DINOv3's tokens, beside DINOv2's
+
+```bash
+python rae.py --decoder raev2/stage1/general/dinov3l-k23/decoder.pt --film --space texture-ip-sd15.npz   --stops 24 --frame 3:2 --long 768 --upscale esrgan/RealESRGAN_x4plus.pth --size 1920x1280 --seconds 180 --out morph-v3.mp4
+python bench_rae.py --out bench.json --quality 48
+```
+
+The same autoencoder on DINOv3: Singh, Zheng, Wu, Zhang, Shechtman and Xie's RAEv2 (2026). The token
+is the mean of DINOv3 ViT-L/16's blocks 1 to 23, each through the final layer norm without its
+learned scale and shift, plus the last layer's mean over the picture ("k23"); the early layers keep
+the pixels' detail, so the decoder copies where RAE's redraws (PSNR 27.0 on ImageNet against 18.9 for
+the last layer alone, their numbers). The decoder is RAEv2's ViT-XL trained beyond ImageNet
+(`nyu-visionx/RAEv2-models`, `stage1/general/dinov3l-k23`, CC BY-NC 4.0), the same architecture as
+RAE's, so `rae.py`'s Decoder reads it; `rae.load` picks DINOv3 for a decoder whose path names it,
+and everything else (`--film`, windows, the lab) is shared. DINOv3 itself is gated: each user asks
+Meta for `facebook/dinov3-vitl16-pretrain-lvd1689m` on Hugging Face. DINOv2's RAE is unchanged and
+stays the default; the lab's token methods offer "tokens: DINOv3" once both are on disk.
+
+A token is 16 pixels either way, but RAEv2's decoder was trained at 256, so a 3:2 frame is drawn in
+many 16 x 16 windows (15 at 768 against DINOv2's two of 32 x 32), and its decoder draws pixels in
+0..1 where RAE's draws them ImageNet-normalised. On the 3090 (`bench_rae.py`, 3:2; the lab's round
+trip is compose with two materials and a subject mask, caches warm):
+
+| long side | decoder alone, DINOv2 / DINOv3 | film frame, batched | encode a picture | lab, dragging | lab, on release (×4) |
+|---|---|---|---|---|---|
+| 512 | 18 / 32 ms (56 / 31 fps) | 14 / 26 ms | 9 / 21 ms | 56 / 71 ms | 0.47 / 0.50 s |
+| 768 | 49 / 71 ms (21 / 14 fps) | 43 / 66 ms | 11 / 35 ms | 129 / 157 ms | 1.12 / 1.16 s |
+| 1024 | 130 / 161 ms (8 / 6 fps) | 124 / 145 ms | 19 / 66 ms | 274 / 299 ms | 1.96 / 2.02 s |
+
+Real-ESRGAN ×4 takes 0.22, 0.49 and 0.86 s at the three sizes for either. On 48 archive crops at 512,
+DINOv3 reconstructs at PSNR 27.7 (SSIM 0.91, colour shift 0.015) against DINOv2's 21.3 (0.58,
+0.044). Halfway between two pictures DINOv2 draws one new surface and DINOv3 something closer to a
+double exposure, so DINOv2 stays the morph's (the flagship) and DINOv3 is for keeping a photograph
+itself; the same 24-stop morph in DINOv3 is `exports/rae/morph-24-dinov3.mp4`.
+
+`dinov3l-k7` (every other block from 11 to 23, the deeper half; `raev2.py` reads the layers off the
+decoder's path) costs exactly what k23 costs and sits between the two: PSNR 22.2, SSIM 0.75. Measured
+as colourfulness against the photograph's own (Hasler and Süsstrunk's, in `bench_rae.py`), DINOv2
+gives 144%, DINOv3 k23 113% (close to the photograph: its "grey" is relative) and k7 165%; halfway
+through a mix, DINOv2 keeps 84% of its ends' colour, k7 68%, k23 55%. The lab offers all three as
+`tokens`; its morph is `exports/rae/morph-24-dinov3-k7.mp4`, the least evenly paced of the three.
+
 ### tokendit.py — new token grids, drawn
 
 ```bash

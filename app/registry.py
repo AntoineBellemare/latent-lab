@@ -1092,7 +1092,7 @@ _tokens, _tokens_lock = collections.OrderedDict(), threading.Lock()
 def tokens_of(key, rae, load, grid):
     """A picture's token grid, kept for the last few dozen asked: encoding is 10 ms, but the photograph
     behind it can be a 6000 px JPEG off the photo drive."""
-    k = json.dumps([key, grid], default=str)
+    k = json.dumps([key, grid, getattr(rae, "path", type(rae).__name__)], default=str)
     with _tokens_lock:
         if k in _tokens:
             _tokens.move_to_end(k)
@@ -1151,13 +1151,36 @@ def order_of(engine, inputs, params, c, inside):
     return np.interp(f, ref, np.linspace(0.0, 1.0, ref.size)).astype(np.float32)
 
 
+ENCODERS = {"DINOv2": "RAE on DINOv2-B: the original, faster (21 frames a second at 768), redraws what it is given",
+            "DINOv3": "RAEv2 on DINOv3-L, 23 layers: keeps the photograph's own detail and colour, slower (14 at 768)",
+            "DINOv3 k7": "RAEv2 on DINOv3-L's deeper half (7 layers): between the two, as fast as DINOv3"}
+ENCODER_FILES = {"DINOv3": "raev2", "DINOv3 k7": "raev2k7"}
+
+
+def rae_of(files, params):
+    """The decoder for the tokens asked for: one of DINOv3's (RAEv2) when chosen and on disk, else DINOv2's."""
+    return files.get(ENCODER_FILES.get(params.get("encoder"), "rae")) or files["rae"]
+
+
+def dinov3_ready():
+    """DINOv3's encoder in the Hugging Face cache (gated: each user requests it from Meta)."""
+    try:
+        from huggingface_hub import try_to_load_from_cache
+
+        import raev2
+
+        return isinstance(try_to_load_from_cache(raev2.ENCODER, "config.json"), str)
+    except Exception:
+        return False
+
+
 class TokenFrame:
     """What a token method works in: the decoder, the picture's frame at the working size (16 px a
     token, the picture's own shape), the picture itself, and the lab's mask for it."""
 
     def __init__(self, engine, inputs, params, files):
         self.engine, self.inputs, self.params, self.files = engine, inputs, params, files
-        self.rae = engine.rae(files["rae"])
+        self.rae = engine.rae(rae_of(files, params))
         self.cpath = engine.content_path(inputs["content"])
         self.rows, self.cols = self.rae.grid(*engine.frame(self.cpath, 1024), int(params["long"]) // 16)
         self.W, self.H = self.cols * 16, self.rows * 16
@@ -1220,7 +1243,7 @@ def decoded(engine, files, params, rae, z, grid):
     """Tokens drawn back to a picture, enlarged four times by Real-ESRGAN on release and in exports."""
     import rae as R
 
-    out = rae.decode(R.renorm(z.reshape(1, grid[0] * grid[1], -1)), grid)[0]
+    out = rae.decode(rae.shell(z.reshape(1, grid[0] * grid[1], -1)), grid)[0]
     if params.get("_export") or (params.get("enlarge") and not params.get("_drag")):
         out = engine.enlarged(files["upscale"], out)
     return out
@@ -1385,7 +1408,7 @@ def _hybrid_runner(files):
     def run(engine, inputs, params, watch=None):
         import torch
 
-        rae = engine.rae(files["rae"])
+        rae = engine.rae(rae_of(files, params))
         rows, cols = rae.grid(*FRAMES[params["frame"]], int(params["long"]) // 16)
         W, H = cols * 16, rows * 16
         names = [inputs[k] for k in COMPOSED if inputs.get(k)]
@@ -1907,6 +1930,16 @@ def build(preset="sd15", root=None, manifest=None):
     files = {k: manifest.get(k) for k in ("rae", "upscale")}
     if root and all(files.values()) and all((pathlib.Path(root) / f).is_file() for f in files.values()):
         files = {k: str(pathlib.Path(root) / f) for k, f in files.items()}
+        for key in ENCODER_FILES.values():
+            v3 = manifest.get(key)
+            if v3 and (pathlib.Path(root) / v3).is_file() and dinov3_ready():
+                files[key] = str(pathlib.Path(root) / v3)
+        # Which tokens: offered once DINOv3 and RAEv2's decoders are on disk; DINOv2's stays the default.
+        offered = [k for k in ENCODERS if k == "DINOv2" or ENCODER_FILES[k] in files]
+        encoder = [P("encoder", "choice", "DINOv2", options=offered, label="tokens", group=OUT,
+                     choices={k: ENCODERS[k] for k in offered},
+                     doc="whose tokens, and whose decoder draws them back: DINOv2's RAE, or DINOv3's RAEv2, which "
+                         "keeps the photograph's own detail and colour")] if len(offered) > 1 else []
         methods.append(dict(
             key="compose", family="tokens", cost="live", export=True,
             doc="your material photographs laid into a picture in DINOv2's token grid and drawn back by RAE's "
@@ -1936,6 +1969,7 @@ def build(preset="sd15", root=None, manifest=None):
                           "third of it (the GANs' crop); larger is coarser grain"),
                     P("seed", "seed", 0, label="crop", group="compose",
                       doc="where in each photograph its piece is taken: 0 the middle, ⚄ somewhere else")]
+                   + encoder
                    + [x for x in MASK if x["key"] != "harmonise"]
                    + [P("long", "choice", 768, options=[512, 768, 1024], label="working size", group=OUT,
                         choices={512: "fastest, about 20 ms a frame", 768: "3:2 at 768 x 512, about 45 ms",
@@ -1988,9 +2022,9 @@ def build(preset="sd15", root=None, manifest=None):
                       doc="another number: other random choices, and another piece of the material")]
                    + [x for x in MASK if x["key"] != "harmonise"]
                    + [G(next(x for x in methods[-1]["params"] if x["key"] == "long"), OUT),
-                      G(next(x for x in methods[-1]["params"] if x["key"] == "enlarge"), OUT)],
+                      G(next(x for x in methods[-1]["params"] if x["key"] == "enlarge"), OUT)] + encoder,
             run=_mosh_runner(files)))
-        out_params = [G(next(x for x in methods[-2]["params"] if x["key"] == k), OUT) for k in ("long", "enlarge")]
+        out_params = [G(next(x for x in methods[-2]["params"] if x["key"] == k), OUT) for k in ("long", "enlarge")] + encoder
         way = lambda *ways: [["pattern", "in", list(ways)]]  # noqa: E731
         methods.append(dict(
             key="hybrid", family="tokens", cost="live", export=True,

@@ -42,11 +42,11 @@ const QUICK = [["none", "whole picture"], ["subject", "main subject"], ["person"
                ["shadow", "shadow"], ["object (words)", "named thing"]];
 const SIZES = [512, 768, 1024];
 const FRAMES = ["3:2", "1:1", "2:3"];
-const OUTPUT = new Set(["long", "enlarge", "frame"]);
+const OUTPUT = new Set(["long", "enlarge", "frame", "encoder"]);
 
 let wayKey = "laid";
 const own = {};               // each way's settings: key -> {param: value}
-const st = {long: 768, enlarge: true, frame: "3:2"};   // shared: the mask, the size, the frame, the enlargement
+const st = {long: 768, enlarge: true, frame: "3:2", encoder: "DINOv2"};   // shared: the mask, the size, the frame, the enlargement
 const inputs = {content: null, texture: null, textureB: "", textureC: ""};
 let shown = null, frameUrl = null, gridOwner = "vary";
 let stage, where, hist, vary, masks, live, tiles, slots = {}, surprises = [];
@@ -61,6 +61,7 @@ const knobKeys = w => spec(w).params.filter(p => !maskKeys(spec(w)).includes(p.k
 function params(w = way()) {
   const p = {...own[w.key], long: st.long, enlarge: st.enlarge, _tab: "tokens"};
   if (w.method === "hybrid" || w.method === "draw") p.frame = st.frame;
+  if (param(spec(w), "encoder")) p.encoder = st.encoder;
   if (onPicture(w)) for (const k of maskKeys(spec(w))) p[k] = st[k];
   return p;
 }
@@ -206,6 +207,14 @@ function build() {
     b.onclick = () => { st.frame = f; changed("settle", "materials"); refreshTiles("drawn"); };
     $("frameSeg").appendChild(b);
   }
+  const encoders = MENU.methods.compose && param(MENU.methods.compose, "encoder");
+  for (const e of encoders ? encoders.options : []) {
+    const b = el("button", "", e);
+    b.dataset.encoder = e;
+    b.title = encoders.choices[e];
+    b.onclick = () => { st.encoder = e; changed("settle"); refreshTiles(); };
+    $("encoderSeg").appendChild(b);
+  }
   $("enlargeRow").appendChild(tick("enlarge ×4 when you let go (Real-ESRGAN)", st.enlarge, v => { st.enlarge = v; changed("settle"); }));
   $("tuneBox").ontoggle = () => store("tokens.tune", $("tuneBox").open);
   $("tuneBox").open = !!stored("tokens.tune");
@@ -265,6 +274,8 @@ function sync() {
   $("whereCard").hidden = !onPicture(w);
   if (onPicture(w)) where.sync();
   $("frameRow").hidden = !["hybrid", "draw"].includes(w.method);
+  $("encoderRow").hidden = !param(spec(w), "encoder");
+  $("encoderSeg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.encoder === st.encoder));
   $("sizeSeg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", +b.dataset.size === st.long));
   $("frameSeg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.frame === st.frame));
   stage.marks(onPicture(w) ? where.marks() : []);

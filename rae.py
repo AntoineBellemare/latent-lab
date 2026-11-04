@@ -117,31 +117,42 @@ class Decoder(nn.Module):
 
 
 class RAE:
-    def __init__(self, decoder, device="cuda", half=True):
-        from transformers import Dinov2WithRegistersModel
+    NORMALISED = True  # the decoder draws ImageNet-normalised pixels (RAEv2's draws 0..1)
 
+    def __init__(self, decoder, device="cuda", half=True):
+        self.path = str(decoder)
         state = torch.load(decoder, map_location="cpu", weights_only=True)
         for wrap in ("model", "ema", "state_dict"):
             if isinstance(state, dict) and wrap in state and isinstance(state[wrap], dict):
                 state = state[wrap]
         state = {k.removeprefix("decoder."): v for k, v in state.items()}
         patches, width = state["decoder_pos_embed"].shape[1] - 1, state["decoder_pos_embed"].shape[2]
-        self.decoder = Decoder(patches, width)
+        self.decoder = Decoder(patches, width, state["decoder_embed.weight"].shape[1])
         missing, unexpected = self.decoder.load_state_dict(state, strict=False)
         if missing or unexpected:
             raise SystemExit(f"{decoder}: missing {missing[:4]}, unexpected {unexpected[:4]}")
         self.side = self.decoder.side
         self.size = self.side * 16
-        self.encoder = Dinov2WithRegistersModel.from_pretrained(ENCODER, local_files_only=True, attn_implementation="sdpa")
-        self.encoder.layernorm.elementwise_affine = False
-        self.encoder.layernorm.weight = None
-        self.encoder.layernorm.bias = None
         self.dtype = torch.float16 if half and device != "cpu" else torch.float32
         self.device = device
-        self.encoder.to(device, self.dtype).eval()
+        self.encoder = self.load_encoder().to(device, getattr(self, "encoder_dtype", self.dtype)).eval()
         self.decoder.to(device, self.dtype).eval()
         if device != "cpu":
             torch.backends.cudnn.benchmark = True
+
+    def load_encoder(self):
+        """DINOv2-B with registers, its last layer norm without its learned scale and shift."""
+        from transformers import Dinov2WithRegistersModel
+
+        encoder = Dinov2WithRegistersModel.from_pretrained(ENCODER, local_files_only=True, attn_implementation="sdpa")
+        encoder.layernorm.elementwise_affine = False
+        encoder.layernorm.weight = None
+        encoder.layernorm.bias = None
+        return encoder
+
+    def shell(self, z):
+        """A mix of tokens put back where real tokens lie: for DINOv2, `renorm`."""
+        return renorm(z)
 
     def grid(self, width, height, long=None):
         """The token grid (rows, columns) for a frame of this shape, `long` tokens on its long side."""
@@ -179,7 +190,9 @@ class RAE:
         g = z.view(len(z), rows, cols, -1)
         pieces = torch.cat([g[:, y:y + hh, x:x + ww].reshape(len(z), hh * ww, -1) for y in ys for x in xs])
         x = self.decoder(pieces, (hh, ww)).float()
-        x = (x * STD.to(x.device) + MEAN.to(x.device)).clamp(0, 1)
+        if self.NORMALISED:
+            x = x * STD.to(x.device) + MEAN.to(x.device)
+        x = x.clamp(0, 1)
         if len(ys) * len(xs) == 1:
             return x.permute(0, 2, 3, 1).cpu().numpy()
         # Each window weighs most in its middle and fades to almost nothing at its edges, over the
@@ -241,7 +254,7 @@ def film(rae, files, args):
     print(f"{len(files)} photographs, grid {rows} x {cols}", flush=True)
 
     def look(u):
-        image = rae.decode(renorm(along(halves, u))[None], small)[0]
+        image = rae.decode(rae.shell(along(halves, u))[None], small)[0]
         return image.reshape(small[0] * 4, 4, small[1] * 4, 4, 3).mean((1, 3))
 
     frames = round(args.seconds * args.fps)
@@ -256,7 +269,7 @@ def film(rae, files, args):
     out = pathlib.Path(args.out)
     writer, moved, last, first = None, [], None, None
     for i, u in enumerate(moments):
-        image = rae.decode(renorm(along(grids, u))[None], (rows, cols))[0]
+        image = rae.decode(rae.shell(along(grids, u))[None], (rows, cols))[0]
         shown = np.clip(upscale.enlarge(net, image) if net is not None else image, 0, 1)
         shown = Image.fromarray((shown * 255).round().astype(np.uint8))
         if size and shown.size != size:
@@ -285,6 +298,16 @@ def film(rae, files, args):
     print(f"{out}: {frames} frames, evenness {moved.std() / moved.mean():.3f}", flush=True)
 
 
+def load(decoder, device="cuda"):
+    """The autoencoder a decoder belongs to: one trained on DINOv3's tokens (a path naming dinov3, as
+    RAEv2's do) is raev2.py's, anything else DINOv2's."""
+    if "dinov3" in pathlib.Path(decoder).as_posix().lower():
+        import raev2
+
+        return raev2.RAEv2(decoder, device)
+    return RAE(decoder, device)
+
+
 def read(path):
     with Image.open(path) as im:
         return np.asarray(im.convert("RGB"), np.float32) / 255
@@ -296,7 +319,8 @@ def save(image, path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--decoder", required=True, help="An RAE decoder for DINOv2-B with registers (model.pt).")
+    ap.add_argument("--decoder", required=True, help="An RAE decoder: for DINOv2-B with registers (model.pt), or "
+                    "RAEv2's for DINOv3 (its path names dinov3; raev2.py).")
     ap.add_argument("--out", required=True, help="A folder; with --film, an .mp4.")
     ap.add_argument("--mix", nargs=2, help="Two pictures: decode the straight line between their token grids.")
     ap.add_argument("--steps", type=int, default=25)
@@ -315,7 +339,7 @@ def main():
     ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     ap.add_argument("images", nargs="*")
     args = ap.parse_args()
-    rae = RAE(args.decoder, args.device)
+    rae = load(args.decoder, args.device)
     if args.film:
         files = args.images
         if args.space:

@@ -55,6 +55,8 @@
     }
   ],
   "rae": "rae/ViTXL_n08_i512/model.pt",
+  "raev2": "raev2/stage1/general/dinov3l-k23/decoder.pt",
+  "raev2k7": "raev2/stage1/general/dinov3l-k7/decoder.pt",
   "upscale": "esrgan/RealESRGAN_x4plus.pth",
   "tokendit": "tokendit",
   "rae256": "rae/ViTXL_n08/model.pt",

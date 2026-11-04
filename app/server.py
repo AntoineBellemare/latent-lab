@@ -65,13 +65,14 @@ class LabEngine:
         return engine
 
     def rae(self, decoder):
-        """RAE's decoder and DINOv2's encoder (rae.py), loaded on first use: about a gigabyte in half
-        precision, one per decoder (the 512 composes, the 256 draws the generator's grids)."""
+        """RAE's decoder and DINOv2's encoder (rae.py), or RAEv2's and DINOv3's (raev2.py), loaded on first
+        use: one to two gigabytes in half precision, one per decoder (the 512 composes, the 256 draws the
+        generator's grids, RAEv2's composes in DINOv3)."""
         import rae
 
         with self.loading:
             if decoder not in self._raes:
-                self._raes[decoder] = rae.RAE(decoder, str(self.device))
+                self._raes[decoder] = rae.load(decoder, str(self.device))
                 print("  rae up:", pathlib.Path(decoder).parent.name)
         return self._raes[decoder]
 

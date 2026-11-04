@@ -11,8 +11,16 @@ __pycache__/
 *.pt
 *.log
 
-# What the tools write to look at.
+# What the tools write to look at. The lab's own pages are not that.
 *.html
+!app/static/*.html
 *.png
+
+# The photographs themselves (the lab's pictures and textures, full size, some of people): kept on the
+# machine, never in a public history.
+dataset/
+
+# This machine's launchers.
+.claude/
 onnxruntime_profile__*.json
 paths.local.sh

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hidden Faces</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@1,6..72,500&family=IBM+Plex+Sans:wght@350;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="studio.css">
+<link rel="stylesheet" href="hidden.css">
+</head>
+<body class="studio">
+<header id="top">
+  <h1>Latent Lab
+    <nav class="tabs" aria-label="pages"><a href="/">lab</a><a href="/editor.html">editor</a><a href="/mapping.html">mapping</a><a href="/hidden.html" aria-current="page">hidden</a><a href="/tokens.html">tokens</a></nav>
+  </h1>
+  <div class="toprow"><div id="jobsLight" title="queue">·</div></div>
+</header>
+<div id="studio">
+  <section id="view"></section>
+  <aside id="controls">
+    <div class="card" id="inputsCard">
+      <div class="lab">face and texture</div>
+      <div class="hintline" id="pairLinks">the same pair in <button class="link" id="toMapping">mapping</button> ·
+        <button class="link" id="toEditor">the editor</button></div>
+    </div>
+
+    <div class="card" id="visCard">
+      <div class="lab">how hidden</div>
+      <div class="vis"><span>hidden</span><input type="range" id="vis" min="0" max="1" step="0.01" aria-label="how hidden: from hidden to plain"><span>plain</span></div>
+      <div class="hintline" id="visNote"></div>
+    </div>
+
+    <div class="card" id="wayCard">
+      <div class="lab">way <span class="hintline">each one on your pair</span></div>
+      <div id="tiles"></div>
+      <div id="wayDoc" class="hintline"></div>
+      <label class="words" id="wordsRow">the texture is
+        <input id="words" type="text" placeholder="e.g. pine bark, rusted rock" autocomplete="off"></label>
+      <details class="fold" id="tuneBox">
+        <summary>fine-tune <span class="sum"></span></summary>
+        <div id="knobs" class="args"></div>
+      </details>
+    </div>
+
+    <div id="go">
+      <div class="row"><span class="k">size</span><div class="seg small grow" id="sizeSeg" role="group" aria-label="size"></div></div>
+      <div class="row">
+        <button id="keep" class="primary" title="keep this one: it goes in the history (K)">keep</button>
+        <button id="vary" title="the same face and texture across several renders, side by side: from hidden to plain, other textures, or seeds">vary…</button>
+      </div>
+      <div class="row">
+        <button id="export" title="render at the picture's own full resolution">export full size</button>
+        <button id="recipe" title="save these settings as a lab recipe">save recipe</button>
+      </div>
+    </div>
+  </aside>
+</div>
+<script type="module" src="hidden.js"></script>
+</body>
+</html>

@@ -59,6 +59,20 @@ PRESETS = {
         guidance=1.0,
         size=512,
     ),
+    # The high-resolution renderer behind the same vectors: a quality SDXL base at 1024 with the
+    # sdxl adapter, no speed-up. Same encoder as sdxl-turbo, so spaces built for one draw on both;
+    # quality against speed is a dial to set deliberately, and this preset is the quality end.
+    "sdxl": dict(
+        model="SG161222/RealVisXL_V4.0",
+        repo="h94/IP-Adapter",
+        subfolder="sdxl_models",
+        weight="ip-adapter_sdxl.safetensors",
+        encoder="sdxl_models/image_encoder",
+        fast=None,
+        steps=30,
+        guidance=6.0,
+        size=1024,
+    ),
 }
 CLIP_MEAN = (0.48145466, 0.4578275, 0.40821073)
 CLIP_STD = (0.26862954, 0.26130258, 0.27577711)

@@ -86,12 +86,48 @@ class Mapping(nn.Module):
         return self.net(z * torch.rsqrt(z.pow(2).mean(1, keepdim=True) + 1e-8))
 
 
+class Look(nn.Module):
+    """A place in the lab's space, turned into a shift a network can use.
+
+    The adapter's encoder puts every texture in a narrow cone: the vectors share most of their
+    direction, and what tells lichen from frost is a small part of each. So the vector is put on the
+    unit sphere, the set's own centre is taken off, and what is left is scaled to about one per number
+    before anything learns from it. A mix arrives as a weighted sum at any length and only its
+    direction is read, which is also how the lab renormalises one.
+    """
+
+    def __init__(self, width, out, start):
+        super().__init__()
+        self.register_buffer("centre", torch.zeros(width))
+        self.register_buffer("scale", torch.ones(()))
+        self.noise = 0.0
+        self.net = nn.Sequential(nn.Linear(width, 512), nn.LeakyReLU(0.2, True), nn.Linear(512, out, bias=False))
+        if start:
+            nn.init.normal_(self.net[2].weight, 0.0, start)
+        else:
+            nn.init.zeros_(self.net[2].weight)
+
+    def standard(self, v):
+        """The place on the unit sphere, the set's centre off, about one per number."""
+        v = v * torch.rsqrt(v.square().sum(1, keepdim=True) + 1e-12)
+        return (v - self.centre) / self.scale
+
+    def forward(self, v):
+        x = self.standard(v)
+        if self.training and self.noise:
+            # A set shows the space at a few tens of thousands of places, and a patch will ask for the
+            # ones between. Jittered, neighbouring places learn to draw neighbouring pictures.
+            x = x + self.noise * torch.randn_like(x)
+        return self.net(x)
+
+
 class Generator(nn.Module):
-    def __init__(self, latent, size, ngf, depth=4, classes=0, fade=False):
+    def __init__(self, latent, size, ngf, depth=4, classes=0, fade=False, looks=0):
         super().__init__()
         self.latent = latent
         self.size = size
         self.classes = classes
+        self.looks = looks
         # Grown from a smaller model: keep its output head and blend away from it. The new layers
         # start random, and without this the first thousands of steps go on training their noise back
         # out — which reads as a hatching laid over everything the old model already drew well.
@@ -105,6 +141,11 @@ class Generator(nn.Module):
             # run begun from an unconditional parent draws what the parent drew until this earns its say.
             self.tag = nn.Linear(classes, latent, bias=False)
             nn.init.normal_(self.tag.weight, 0.0, 0.02)
+        if looks:
+            # A place in the space instead of a category: an offset of fixed reach in `w` (see `w_of`).
+            # The reach is measured on the generator the run starts from, so it is a buffer.
+            self.look = Look(looks, latent, 0.01)
+            self.register_buffer("reach", torch.zeros(()))
         self.mapping = Mapping(latent, depth)
         self.stem = nn.Sequential(
             nn.ConvTranspose2d(latent, channels(4, ngf) * 2, 4, 1, 0, bias=False),
@@ -139,12 +180,37 @@ class Generator(nn.Module):
         grown = F.interpolate(prior, scale_factor=2, mode="bilinear", align_corners=False)
         return grown + (drawn - grown) * self.alpha
 
-    def steered(self, z, hot):
-        """`z` with its category folded in, which is what the mapping network is given."""
-        return z + self.tag(hot) if self.classes else z
+    def w_of(self, z, hot=None):
+        """`w` for this `z`, with its category or its place in the space folded in.
+
+        A category shifts `z` before the mapping. A place given any way that meets `z` before `w` is
+        heard instead of `z`, and three runs found it from three sides. Added to `z`, the place grew to
+        sixty times its size within 6,000 steps and every draw of a place came out the same picture:
+        a crop's place all but names one picture, so a generator loses nothing the critic can see by
+        ignoring `z`. Held at `z`'s size, `z` lived and the place stopped steering (found 0.04 at
+        6,000 steps, where the first run had 0.11): it reached the network through a noise exactly as
+        loud as itself. Added after the mapping's first layer, `z` drowned again (it moved the picture
+        0.004 against the place's 0.45) — the place's path learns at ten times the rate and `z`'s,
+        through the mapping, at a hundredth, so the place outgrows `z` a thousand times faster than
+        `z` can answer, whatever the floor asks for.
+
+        So `z` goes through the mapping alone, exactly as in the model it started from, and the
+        place moves the result by a fixed `reach` in `w`: the variety within a place is the
+        unconditional model's own, and cannot be drowned. It is the same shape the category export
+        already has (`Blended`): a mean per material in `w`, and `z` along shared axes.
+        """
+        if self.classes:
+            return self.mapping(z + self.tag(hot))
+        w = self.mapping(z)
+        if not self.looks:
+            return w
+        s = self.look(hot)
+        # By its L2 norm rather than `s * rsqrt(mean(s^2))`: onnxruntime fuses that pattern into an
+        # RMS norm and, with a factor in front, leaves the graph with an edge nothing writes.
+        return w + s * (self.reach * s.shape[1] ** 0.5 / (torch.linalg.vector_norm(s, dim=1, keepdim=True) + 1e-6))
 
     def forward(self, z, hot=None):
-        return self.synthesis(self.mapping(self.steered(z, hot)))
+        return self.synthesis(self.w_of(z, hot))
 
 
 def resolutions(size):
@@ -160,9 +226,10 @@ def excited(size):
 class Discriminator(nn.Module):
     """Down to 8x8 for the verdict, and back up from it for the reconstruction that regularises it."""
 
-    def __init__(self, size, ndf, classes=0):
+    def __init__(self, size, ndf, classes=0, looks=0):
         super().__init__()
         self.classes = classes
+        self.looks = looks
         steps = [nn.Conv2d(3, channels(size, ndf), 4, 2, 1, bias=False), nn.LeakyReLU(0.2, True)]
         for r in reversed([r for r in sorted(WIDTH) if 8 < r <= size // 2]):
             steps += [
@@ -178,16 +245,27 @@ class Discriminator(nn.Module):
             # to start with, so a warm start's verdict is its parent's until the class earns its say.
             self.tag = nn.Linear(classes, channels(16, ndf), bias=False)
             nn.init.zeros_(self.tag.weight)
+        if looks:
+            self.look = Look(looks, channels(16, ndf), 0.0)
+            # And a head that reads the place back off a picture. Projection alone teaches the critic
+            # which place it is shown only through the fakes that miss it, and three runs drew
+            # textures that matched nothing after 6,000 steps (found 0.04 to 0.06, chance 0.02).
+            # Read off real crops it is plain supervision, and asking the generator to be read
+            # right is a gradient that says lichen, not frost — AC-GAN's auxiliary, for a place.
+            self.ask = nn.Linear(channels(16, ndf), looks)
         self.whole = decoder(channels(16, ndf), ndf)
         self.part = decoder(channels(16, ndf), ndf)
 
     def forward(self, x, hot=None):
         f = self.down(x)
+        self.pooled = f.mean((2, 3))  # what `ask` reads, kept from the last picture judged
         quarter = random.randint(0, 3)
         half = f[:, :, (quarter // 2) * 4 : (quarter // 2) * 4 + 4, (quarter % 2) * 4 : (quarter % 2) * 4 + 4]
         spoken = self.verdict(f).flatten(1).mean(1)
         if self.classes and hot is not None:
             spoken = spoken + (f.mean((2, 3)) * self.tag(hot)).sum(1)
+        if self.looks and hot is not None:
+            spoken = spoken + (f.mean((2, 3)) * self.look(hot)).sum(1)
         return spoken, self.whole(f), self.part(half), quarter
 
 
@@ -278,6 +356,60 @@ class Folder(torch.utils.data.Dataset):
         return got, self.tags[i]
 
 
+class Crops(torch.utils.data.Dataset):
+    """The crops `embed_crops.py` cut, each with its place in the space the lab mixes in.
+
+    Read from disk per step, because tens of thousands of crops do not fit in memory and a 576px
+    JPEG opens far faster than a step takes. Each was kept a little larger than the square, so the
+    square still moves inside it.
+
+    A share of the time (`whole`) a crop is labelled with its PHOTOGRAPH's place rather than its own:
+    the mean of every crop that photograph gave. The lab's materials are means like that — a preset, a
+    texture, a photograph — so the generator has to learn what a mean asks for as well as one crop.
+    """
+
+    def __init__(self, where, size, whole=0.75):
+        self.root = pathlib.Path(where).expanduser()
+        held = np.load(self.root / "crops.npz")
+        self.names = list(held["crops"])
+        self.emb = held["emb"].astype(np.float32)
+        owner = held["owner"]
+        self.photo = np.zeros((owner.max() + 1, self.emb.shape[1]), np.float32)
+        np.add.at(self.photo, owner, self.emb)
+        self.owner = owner
+        self.size = size
+        self.whole = whole
+
+    def __len__(self):
+        return len(self.names)
+
+    def __getitem__(self, i):
+        with Image.open(self.root / "crops" / self.names[i]) as im:
+            held = np.asarray(im.convert("RGB"), dtype=np.uint8)
+        top = random.randint(0, held.shape[0] - self.size)
+        left = random.randint(0, held.shape[1] - self.size)
+        crop = held[top : top + self.size, left : left + self.size]
+        if random.random() < 0.5:
+            crop = crop[:, ::-1]
+        got = torch.tensor(np.ascontiguousarray(crop), dtype=torch.float32).permute(2, 0, 1) / 127.5 - 1.0
+        # Only the direction is read, so a photograph's sum needs no dividing.
+        return got, torch.from_numpy(self.photo[self.owner[i]] if random.random() < self.whole else self.emb[i])
+
+    def standards(self):
+        """Where the set sits on the unit sphere, and how far it spreads from there, per number."""
+        unit = self.emb / np.linalg.norm(self.emb, axis=1, keepdims=True)
+        centre = unit.mean(0)
+        return torch.from_numpy(centre), torch.tensor(float(np.sqrt(np.square(unit - centre).mean())))
+
+    def sample(self, count, seed=0):
+        """`count` crops' places, each from a different photograph."""
+        rng = np.random.default_rng(seed)
+        every = np.unique(self.owner)
+        photos = rng.choice(every, count, replace=count > len(every))
+        picks = [rng.choice(np.flatnonzero(self.owner == p)) for p in photos]
+        return torch.from_numpy(self.emb[picks])
+
+
 def quadrant(x, which):
     half = x.shape[-1] // 2
     return x[:, :, (which // 2) * half : (which // 2) * half + half, (which % 2) * half : (which % 2) * half + half]
@@ -351,22 +483,52 @@ class Blended(nn.Module):
         return self.gen.synthesis(share @ self.means + (z * self.sigma) @ self.basis)
 
 
-def axes_of(gen, latent, device, samples=8192, keep=None, classes=0):
+class Looked(nn.Module):
+    """The space-conditioned generator as a patch drives it: a place in the lab's space, and the axes
+    within one look.
+
+    A place has no precomputed mean the way a category does, so the mean is taken live: the same
+    fixed draws of `z` (`anchors`) through the mapping with this place folded in, averaged. That is
+    sixty-four rows of a small MLP, nothing beside the synthesis.
+    """
+
+    def __init__(self, gen, anchors, basis, sigma):
+        super().__init__()
+        self.gen = gen
+        self.register_buffer("anchors", anchors)
+        self.register_buffer("basis", basis)
+        self.register_buffer("sigma", sigma)
+
+    def forward(self, z, look):
+        middle = self.gen.w_of(self.anchors, look).mean(0, keepdim=True)
+        return self.gen.synthesis(middle + (z * self.sigma) @ self.basis)
+
+
+def axes_of(gen, latent, device, samples=8192, keep=None, classes=0, looks=None):
     """The principal axes of `w`, by sampling the mapping network the space is reached through.
 
     With categories the mean is taken PER category, and the axes come from what is left once each
     category's own mean is removed. The directions are then within-category variation rather than
-    the switch from one category to the next, which the category input already carries.
+    the switch from one category to the next, which the category input already carries. With places
+    in the space (`looks`, a sample of them) it is the same, place by place, and what comes back in
+    place of the means is the fixed draws `Looked` takes its live mean over.
     """
     gen.eval()
     with torch.no_grad():
-        if classes:
+        if looks is not None:
+            middle = torch.randn(64, latent, generator=torch.Generator().manual_seed(0)).to(device)
+            centred = []
+            for v in looks.to(device):
+                w = gen.w_of(torch.randn(max(1, samples // len(looks)), latent, device=device), v[None])
+                centred.append(w - w.mean(0))
+            centred = torch.cat(centred)
+        elif classes:
             rounds = max(1, samples // (512 * classes))
             means, centred = [], []
             for c in range(classes):
                 hot = F.one_hot(torch.full((512,), c, device=device), classes).float()
                 w = torch.cat(
-                    [gen.mapping(gen.steered(torch.randn(512, latent, device=device), hot)) for _ in range(rounds)]
+                    [gen.w_of(torch.randn(512, latent, device=device), hot) for _ in range(rounds)]
                 )
                 means.append(w.mean(0))
                 centred.append(w - w.mean(0))
@@ -381,10 +543,14 @@ def axes_of(gen, latent, device, samples=8192, keep=None, classes=0):
     return middle, v[:keep].contiguous(), (s[:keep] / (len(centred) - 1) ** 0.5).contiguous(), float(held)
 
 
-def export(gen, path, latent, size, device, keep=None, classes=0):
+def export(gen, path, latent, size, device, keep=None, classes=0, looks=None):
     """The generator alone, batch one, steered through `w`'s principal axes."""
-    middle, basis, sigma, held = axes_of(gen, latent, device, keep=keep, classes=classes)
-    if classes:
+    middle, basis, sigma, held = axes_of(gen, latent, device, keep=keep, classes=classes, looks=looks)
+    if looks is not None:
+        model = Looked(gen, middle, basis, sigma).eval()
+        given = (torch.zeros(1, basis.shape[0], device=device), looks[:1].to(device))
+        names = ["z", "look"]
+    elif classes:
         model = Blended(gen, middle, basis, sigma).eval()
         given = (torch.zeros(1, basis.shape[0], device=device), torch.zeros(1, classes, device=device))
         names = ["z", "category"]
@@ -450,6 +616,47 @@ def main():
         help="Take each image's category from the folder holding it and condition on it: ONE model "
         "with a category input a patch can blend, instead of one model per folder.",
     )
+    ap.add_argument(
+        "--look",
+        help="A folder from `embed_crops.py`: train on its crops and condition on each crop's place in "
+        "the lab's space instead of on a category, so a mix made there is drawn here, live. "
+        "`--images` is then only a name for the log.",
+    )
+    ap.add_argument(
+        "--whole",
+        type=float,
+        default=0.75,
+        help="With --look, how often a crop is labelled with its photograph's place rather than its own. "
+        "Every material the lab makes is a mean like that, and one crop's own place asks for one picture.",
+    )
+    ap.add_argument("--look-noise", type=float, default=0.25, help="With --look, the jitter on a place, per number of its standardised form.")
+    ap.add_argument(
+        "--look-reach",
+        type=float,
+        default=1.25,
+        help="With --look, how far a place moves `w`, in units of `w`'s own spread. The three-star "
+        "model's categories sit 0.4 to 0.55 from its centre and 0.7 to 0.85 apart; a place is asked to "
+        "steer harder than a category.",
+    )
+    ap.add_argument(
+        "--diverse",
+        type=float,
+        default=1.0,
+        help="With --look, the weight of the floor on how far apart two draws of one place must be; 0 turns it off.",
+    )
+    ap.add_argument(
+        "--ask",
+        type=float,
+        default=1.0,
+        help="With --look, the weight of reading the place back off the picture, for the critic on real "
+        "crops and for the generator on its own; 0 leaves the projection alone to teach it.",
+    )
+    ap.add_argument(
+        "--diverse-floor",
+        type=float,
+        default=0.5,
+        help="That floor, as a share of how far apart two real crops of the batch are.",
+    )
     ap.add_argument("--steps", type=int, default=50000)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--lr", type=float, default=2e-4)
@@ -480,9 +687,15 @@ def main():
     args.r1 = args.r1 or 0.0002 * args.size**2 / args.batch
 
     device = torch.device(args.device)
-    data = Folder(args.images, args.size, args.detail, args.classes)
-    classes = len(data.names)
-    print(f"{len(data)} images under {args.images}, training at {args.size} on {device}, detail {args.detail}")
+    if args.look:
+        data = Crops(args.look, args.size, args.whole)
+        classes, looks = 0, data.emb.shape[1]
+        print(f"{len(data)} crops of {len(np.unique(data.owner))} photographs from {args.look}, each with its place in "
+              f"a {looks}-wide space, training at {args.size} on {device}")
+    else:
+        data = Folder(args.images, args.size, args.detail, args.classes)
+        classes, looks = len(data.names), 0
+        print(f"{len(data)} images under {args.images}, training at {args.size} on {device}, detail {args.detail}")
     if classes:
         counts = np.bincount(data.tags, minlength=classes)
         print("  " + ", ".join(f"{n} {c}" for n, c in zip(data.names, counts)), flush=True)
@@ -498,8 +711,17 @@ def main():
         drop_last=True, persistent_workers=args.workers > 0
     )
 
-    gen = Generator(args.latent, args.size, args.ngf, classes=classes, fade=args.fade > 0).to(device)
-    dis = Discriminator(args.size, args.ndf, classes=classes).to(device)
+    gen = Generator(args.latent, args.size, args.ngf, classes=classes, fade=args.fade > 0, looks=looks).to(device)
+    dis = Discriminator(args.size, args.ndf, classes=classes, looks=looks).to(device)
+    places = None
+    if looks:
+        centre, scale = data.standards()
+        for who in (gen, dis):
+            who.look.centre.copy_(centre)
+            who.look.scale.copy_(scale)
+            who.look.noise = args.look_noise
+        # The places the previews show and the export's axes are measured over: fixed, so snapshots compare.
+        places = data.sample(64)
     print(
         f"generator {sum(q.numel() for q in gen.parameters()) / 1e6:.1f}M parameters, r1 {args.r1:.2f}"
         + (f", fading off its old head over {args.fade} steps" if args.fade else "")
@@ -508,8 +730,8 @@ def main():
     # at exactly what this run measured: left at the same rate it runs away, and `w` ends up with one
     # direction holding most of its variance — a latent with three usable knobs instead of thirty.
     slow = [q for n, q in gen.named_parameters() if n.startswith("mapping.")]
-    quick = [q for n, q in gen.named_parameters() if n.startswith("tag.")]
-    rest = [q for n, q in gen.named_parameters() if not n.startswith(("mapping.", "tag."))]
+    quick = [q for n, q in gen.named_parameters() if n.startswith(("tag.", "look."))]
+    rest = [q for n, q in gen.named_parameters() if not n.startswith(("mapping.", "tag.", "look."))]
     opt_g = torch.optim.Adam(
         [
             {"params": slow, "lr": args.lr * args.mapping_lr},
@@ -521,8 +743,8 @@ def main():
     )
     opt_d = torch.optim.Adam(
         [
-            {"params": [q for n, q in dis.named_parameters() if n.startswith("tag.")], "lr": args.lr * args.tag_lr},
-            {"params": [q for n, q in dis.named_parameters() if not n.startswith("tag.")]},
+            {"params": [q for n, q in dis.named_parameters() if n.startswith(("tag.", "look."))], "lr": args.lr * args.tag_lr},
+            {"params": [q for n, q in dis.named_parameters() if not n.startswith(("tag.", "look."))]},
         ],
         lr=args.lr,
         betas=(0.5, 0.999),
@@ -534,7 +756,7 @@ def main():
     for q in smooth.parameters():
         q.requires_grad_(False)
     path_mean = torch.zeros((), device=device)
-    held_path, taken = 0.0, 0
+    held_path, held_apart, held_read, taken = 0.0, 0.0, 0.0, 0
     step, feed = 0, iter(loader)
     if args.init:
         was = torch.load(args.init, map_location=device, weights_only=False)
@@ -543,6 +765,14 @@ def main():
             if missing or unused:
                 print(f"  {key}: {len(missing)} weights are new here, {len(unused)} of its own unused", flush=True)
         print(f"started from {pathlib.Path(args.init).name}, which had run {was['step']} steps", flush=True)
+    if looks:
+        # Measured on the generator as it starts — the parent's, on a warm start — so the reach means
+        # the same thing as the variety `z` already has there. A resume reads it back from its stash.
+        with torch.no_grad():
+            spread = gen.mapping(torch.randn(4096, args.latent, device=device)).std(0).square().mean().sqrt()
+        for who in (gen, smooth):
+            who.reach.fill_(float(args.look_reach * spread))
+        print(f"  a place moves w by {float(args.look_reach * spread):.3f} per number, {args.look_reach} of its spread", flush=True)
 
     carry = pathlib.Path(args.out).with_suffix(".pt")
     if args.resume and carry.is_file():
@@ -572,10 +802,18 @@ def main():
         except StopIteration:
             feed = iter(loader)
             continue
-        hot = F.one_hot(tags.to(device), classes).float() if classes else None
-        # The generator is asked for categories the way the loader draws them: evenly.
-        drawn = F.one_hot(torch.randint(classes, (args.batch,), device=device), classes).float() if classes else None
-        w = gen.mapping(gen.steered(torch.randn(args.batch, args.latent, device=device), drawn))
+        if looks:
+            # Asked for the very places the real batch came from, so every place it is asked for is
+            # one the set really holds, in the proportions it holds them.
+            hot = tags.to(device)
+            # In pairs: each place asked for twice with two different z, so how far apart the two
+            # pictures come out says whether z still does anything — the floor below reads it.
+            drawn = hot[: args.batch // 2].repeat_interleave(2, 0)
+        else:
+            hot = F.one_hot(tags.to(device), classes).float() if classes else None
+            # The generator is asked for categories the way the loader draws them: evenly.
+            drawn = F.one_hot(torch.randint(classes, (args.batch,), device=device), classes).float() if classes else None
+        w = gen.w_of(torch.randn(args.batch, args.latent, device=device), drawn)
         fake = gen.synthesis(w)
 
         shown, faked = augment(real), augment(fake.detach())
@@ -588,15 +826,34 @@ def main():
         loss_d = F.relu(1.0 - verdict).mean() + F.relu(1.0 + dis(faked, drawn)[0]).mean() + rebuilt
         if args.r1 > 0 and step % args.r1_every == 0:
             loss_d = loss_d + r1(dis, shown, hot, args.r1, args.r1_every)
+        if looks and args.ask > 0:
+            # Read off the crop as it is, not augmented: the colour jitter would teach the head to
+            # ignore colour, and colour is half of what a place says.
+            dis(real, hot)
+            loss_d = loss_d + args.ask * (1 - F.cosine_similarity(dis.ask(dis.pooled), dis.look.standard(hot), dim=1)).mean()
         opt_d.zero_grad(set_to_none=True)
         loss_d.backward()
         opt_d.step()
 
         loss_g = -dis(augment(fake), drawn)[0].mean()
+        if looks and args.diverse > 0:
+            # A floor, not a reward: two draws of one place have to differ by at least a share of
+            # what two real crops do, and past that nothing pushes them apart. Without it nothing in
+            # the game asks for variety within a place, since the critic judges one picture at a time.
+            seen = F.interpolate(fake, size=64, mode="area")
+            truth = F.interpolate(real, size=64, mode="area")
+            apart = (seen[0::2] - seen[1::2]).abs().mean() / (truth - truth.roll(1, 0)).abs().mean().clamp_min(1e-3)
+            loss_g = loss_g + args.diverse * F.relu(1.0 - apart / args.diverse_floor)
+            held_apart = float(apart)
+        if looks and args.ask > 0:
+            dis(fake, drawn)
+            read = F.cosine_similarity(dis.ask(dis.pooled), dis.look.standard(drawn), dim=1).mean()
+            loss_g = loss_g + args.ask * (1 - read)
+            held_read = float(read)
         # Lazily, because the second-order graph is the expensive part and the target it holds is a
         # running average that a fraction of the steps estimates just as well.
         if args.path > 0 and step >= args.path_start and step % args.path_every == 0:
-            w = gen.mapping(gen.steered(torch.randn(args.batch, args.latent, device=device), drawn)).requires_grad_(True)
+            w = gen.w_of(torch.randn(args.batch, args.latent, device=device), drawn).requires_grad_(True)
             penalty, length = path_length(gen, w, gen.synthesis(w), path_mean)
             # An exact running mean until the exponential one would be slower.
             taken += 1
@@ -626,33 +883,35 @@ def main():
         if step % 100 == 0:
             print(
                 f"step {step:>7}  d {loss_d.item():.4f}  g {loss_g.item():.4f}  "
-                f"rebuilt {rebuilt.item():.4f}  path {held_path:.4f}",
+                f"rebuilt {rebuilt.item():.4f}  path {held_path:.4f}" + (f"  apart {held_apart:.2f}  read {held_read:.2f}" if looks else ""),
                 flush=True,
             )
         if step and step % args.snap == 0:
-            preview(smooth, args, device, step)
-            where, keep, held = export(smooth, args.out, args.latent, args.size, device, args.keep, classes)
+            preview(smooth, args, device, step, places)
+            where, keep, held = export(smooth, args.out, args.latent, args.size, device, args.keep, classes, places)
             # Both, always. Weight averaging can blur a generator into something that reads exactly
             # like mode collapse, and telling the two apart afterwards needs the unaveraged one too.
             raw = pathlib.Path(args.out).with_name(pathlib.Path(args.out).stem + "-raw.onnx")
-            export(gen, raw, args.latent, args.size, device, args.keep, classes)
+            export(gen, raw, args.latent, args.size, device, args.keep, classes, places)
             print(f"  exported {where} and {raw.name}: {keep} axes holding {held:.1%} of w", flush=True)
             stash(carry, step, gen, dis, smooth, opt_g, opt_d, path_mean, taken)
         step += 1
 
-    preview(smooth, args, device, step)
-    where, keep, held = export(smooth, args.out, args.latent, args.size, device, args.keep, classes)
+    preview(smooth, args, device, step, places)
+    where, keep, held = export(smooth, args.out, args.latent, args.size, device, args.keep, classes, places)
     # The last snapshot's checkpoint is thousands of steps behind this export. Stash again, so the
     # `.pt` holds the weights the `.onnx` was written from and a blend of two runs blends what was measured.
     stash(carry, step, gen, dis, smooth, opt_g, opt_d, path_mean, taken)
     print(f"wrote {where}: {keep} axes holding {held:.1%} of the variance in w")
 
 
-def preview(gen, args, device, step=0):
+def preview(gen, args, device, step=0, places=None):
     gen.eval()
     with torch.no_grad():
         z = torch.randn(4, args.latent, device=device)
         hot = F.one_hot(torch.arange(4, device=device) % gen.classes, gen.classes).float() if gen.classes else None
+        if gen.looks:
+            hot = places[:4].to(device)
         got = gen(z, hot)
     gen.train()
     tiled = got.permute(0, 2, 3, 1).reshape(-1, args.size, 3).cpu().numpy()

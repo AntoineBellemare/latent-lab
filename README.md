@@ -483,7 +483,8 @@ dial per way with the rest under fine-tune, the lab's mask card for the ways on 
 
 ```bash
 python tokendit.py train --crops crops-yellow3 --decoder rae/ViTXL_n08/model.pt --out tokendit/ --hours 3
-python tokendit.py sample --model tokendit/last.pt --decoder rae/ViTXL_n08/model.pt --space texture-ip-sd15.npz   --places 12 --per 4 --guide 3 --upscale esrgan/RealESRGAN_x4plus.pth --out tokendit/samples/
+python tokendit.py sample --model tokendit/last.pt --decoder rae/ViTXL_n08/model.pt --space texture-ip-sd15.npz   --places 12 --per 4 --guide 3 --grid 32x48 --upscale esrgan/RealESRGAN_x4plus.pth --out tokendit/samples/
+python tokendit.py walk --model tokendit/ema-036390.pt --decoder rae/ViTXL_n08/model.pt --space texture-ip-sd15.npz   --stops 12 --seconds 90 --grid 16x24 --upscale esrgan/RealESRGAN_x4plus.pth --out exports/tokendit/walk.mp4
 ```
 
 The second stage of the RAE paper at the size of its DiT^DH-S, written out: a diffusion transformer
@@ -495,7 +496,20 @@ shifted toward noise by sqrt(16·16·768 / 4096), 50 Euler steps. It trains on `
 crops (a random 512 piece of each 576, flipped, encoded on the fly) and is steered by the lab's
 material space: each crop's own place, or half the time its photograph's, with one in ten dropped
 for "no material" so guidance can push away from it. 196M parameters; a few hundred steps already
-give recognisable materials, coloured by the place asked for.
+give recognisable materials, coloured by the place asked for. Three hours at batch 32 (36,390 steps,
+loss 0.55 → 0.46) on one 3090.
+
+It only ever saw 16 × 16 grids. Any other grid is drawn in overlapping 16 × 16 windows whose
+velocities are cross-faded at every step (`--grid`, and the lab's frame and size): each window sees
+positions it was trained on and neighbours agree on their overlaps, so a 32 × 48 grid comes out one
+seamless 3:2 texture, 2048 × 3072 enlarged, with forms larger than a window. Stretching the
+positions over the bigger grid instead holds at 16 × 24 and turns to brown mud at 32 × 48. A batch
+of 16 draws at 0.15 s each at 16 × 16, 0.28 s at 16 × 24, 2 s at 32 × 48 (30 steps, guidance 3).
+
+`walk` films a closed loop through the most typical photographs of as many regions of the space,
+with the noise held, so one drawing changes material; paced by `flights.steady` (which now takes a
+batched `many`) to move as much from each frame to the next. The lab's `draw` method (tokens tab,
+"drawn new") takes the same frames and sizes, and drags at ten steps from the same noise.
 
 ### play.py — a browser, some knobs, the live model
 

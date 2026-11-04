@@ -1422,7 +1422,8 @@ def _hybrid_runner(files):
 
 def _draw_runner(files):
     """New token grids drawn by the generator (tokendit.py), steered by the materials' places in the
-    space, and drawn back by RAE's 256 decoder."""
+    space, in its 16 x 16 windows over a frame of any shape, and drawn back by RAE's 256 decoder. While
+    a slider drags, ten steps from the same noise: rougher, the same drawing."""
     def run(engine, inputs, params, watch=None):
         import torch
 
@@ -1438,10 +1439,12 @@ def _draw_runner(files):
             w = lineup(np.full((1, 1), float(params["share"]), np.float32), len(ends), 0.5, 1.0)[:, 0, 0]
             v = sum(float(k) * e / np.linalg.norm(e) for k, e in zip(w, ends))
             place = torch.from_numpy((v / np.linalg.norm(v)).astype(np.float32))[None].to(mean.device)
+        grid = rae.grid(*FRAMES[params["frame"]], int(params["long"]) // 16)
+        steps = min(int(params["steps"]), 10) if params.get("_drag") else int(params["steps"])
         gen = torch.Generator(device=mean.device).manual_seed(int(params["seed"]))
         with engine.rae_lock:
-            z = tokendit.sample(model, place, int(params["steps"]), float(params["guide"]), gen, mean, std)
-            return cx.img(decoded(engine, files, params, rae, z, (rae.side, rae.side)))
+            z = tokendit.sample(model, place, steps, float(params["guide"]), gen, mean, std, grid=grid)
+            return cx.img(decoded(engine, files, params, rae, z, grid))
 
     return run
 
@@ -2030,8 +2033,8 @@ def build(preset="sd15", root=None, manifest=None):
             methods.append(dict(
                 key="draw", family="tokens", cost="seconds", export=True,
                 doc="new material drawn straight in DINOv2's token space by a diffusion transformer trained on the "
-                    "archive's crops (tokendit.py), steered by your materials' places in the space, drawn back by "
-                    "RAE's decoder at 256 and enlarged four times",
+                    "archive's crops (tokendit.py), steered by your materials' places in the space, drawn in its "
+                    "16 x 16 windows over a frame of any shape, drawn back by RAE's decoder and enlarged four times",
                 inputs=[I("texture", "texture", "the material to steer toward (its place in the space)", optional=True),
                         I("textureB", "texture", "a second material, to walk toward", optional=True),
                         I("textureC", "texture", "a third", optional=True)],
@@ -2042,6 +2045,13 @@ def build(preset="sd15", root=None, manifest=None):
                         P("steps", "int", 30, 8, 60, 1, label="steps", group="drawn",
                           doc="how many steps from noise: fewer is faster and rougher"),
                         P("seed", "seed", 0, label="seed", group="drawn", doc="another number, another drawing"),
+                        P("frame", "choice", "3:2", options=list(FRAMES), label="frame", group=OUT,
+                          doc="the drawing's shape"),
+                        P("long", "choice", 768, options=[512, 768, 1024], label="working size", group=OUT,
+                          choices={512: "21 x 32 tokens, about a second", 768: "32 x 48 tokens, about 3 s",
+                                   1024: "43 x 64 tokens, about 6 s"},
+                          doc="pixels on the long side the decoder draws (16 per token): a bigger drawing holds more "
+                              "of the material at the same grain, in more of the generator's 16 x 16 windows"),
                         G(next(x for x in methods[-1]["params"] if x["key"] == "enlarge"), OUT)],
                 run=_draw_runner(files)))
     return {m["key"]: m for m in methods}

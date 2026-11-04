@@ -33,7 +33,7 @@ const WAYS = [
   {key: "remixed", method: "hybrid", name: "remixed", on: "materials", dial: "reach", set: {pattern: "remix"},
    doc: "The first material's own pieces scattered over the frame: its grain in a new layout. The dial is how far a piece may travel."},
   {key: "drawn", method: "draw", name: "drawn new", on: "drawn", dial: "share", set: {},
-   doc: "New material drawn from noise by the generator trained on your archive's crops, steered toward the materials' places in the space: not any photograph's tokens, its own. The dial walks between the materials' places; guidance and the seed are under fine-tune. Square, 256 enlarged to 1024; about a second."},
+   doc: "New material drawn from noise by the generator trained on your archive's crops, steered toward the materials' places in the space: not any photograph's tokens, its own. The dial walks between the materials' places, the noise held, so the drawing stays and its material changes; guidance and the seed are under fine-tune. Any frame: it draws in the 16 x 16 windows it learned and joins them, at 768 a 3:2 of 32 x 48 tokens, 2048 x 3072 enlarged, in about 3 s; rougher while you drag."},
 ];
 const KINDS = [["into the picture", "picture"], ["new textures · the materials alone", "materials"],
                ["drawn new · the generator, steered by the materials", "drawn"]];
@@ -60,7 +60,7 @@ const knobKeys = w => spec(w).params.filter(p => !maskKeys(spec(w)).includes(p.k
 
 function params(w = way()) {
   const p = {...own[w.key], long: st.long, enlarge: st.enlarge, _tab: "tokens"};
-  if (w.method === "hybrid") p.frame = st.frame;
+  if (w.method === "hybrid" || w.method === "draw") p.frame = st.frame;
   if (onPicture(w)) for (const k of maskKeys(spec(w))) p[k] = st[k];
   return p;
 }
@@ -203,7 +203,7 @@ function build() {
   for (const f of FRAMES) {
     const b = el("button", "", f);
     b.dataset.frame = f;
-    b.onclick = () => { st.frame = f; changed("settle", "materials"); };
+    b.onclick = () => { st.frame = f; changed("settle", "materials"); refreshTiles("drawn"); };
     $("frameSeg").appendChild(b);
   }
   $("enlargeRow").appendChild(tick("enlarge ×4 when you let go (Real-ESRGAN)", st.enlarge, v => { st.enlarge = v; changed("settle"); }));
@@ -264,7 +264,7 @@ function sync() {
   $("tuneBox").querySelector(".sum").textContent = "· " + w.name;
   $("whereCard").hidden = !onPicture(w);
   if (onPicture(w)) where.sync();
-  $("frameRow").hidden = w.method !== "hybrid";
+  $("frameRow").hidden = !["hybrid", "draw"].includes(w.method);
   $("sizeSeg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", +b.dataset.size === st.long));
   $("frameSeg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.frame === st.frame));
   stage.marks(onPicture(w) ? where.marks() : []);

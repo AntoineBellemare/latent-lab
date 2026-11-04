@@ -191,12 +191,14 @@ def photographs(space, count, rng):
     return places[picked], [str(space["files"][i]) for i in picked]
 
 
-def steady(look, frames, dense=4, rounds=4):
+def steady(look, frames, dense=4, rounds=4, many=None):
     """Moments of the loop at which the picture has moved equally far from each frame to the next,
     and how many jumps stayed bigger than a frame's move however finely the route was drawn.
-    `look(u)` is a small copy of the picture at moment u."""
+    `look(u)` is a small copy of the picture at moment u; `many(us)`, if given, draws a list of
+    moments at once, for a model that is faster in batches."""
+    many = many or (lambda us: [look(x) for x in us])
     u = list(np.arange(frames * dense) / (frames * dense))
-    seen = [look(x) for x in u]
+    seen = list(many(u))
     for pass_ in range(rounds + 1):
         apart = np.array([np.abs(seen[(i + 1) % len(u)] - seen[i]).mean() for i in range(len(u))])
         step = apart.sum() / frames
@@ -204,10 +206,10 @@ def steady(look, frames, dense=4, rounds=4):
         if not len(coarse) or pass_ == rounds:
             break
         # Wherever the picture jumped more than half a frame's move, draw the route finer there.
-        for i in coarse[::-1]:
-            mid = (u[i] + (u[i + 1] if i + 1 < len(u) else 1.0)) / 2
+        mids = [(u[i] + (u[i + 1] if i + 1 < len(u) else 1.0)) / 2 for i in coarse]
+        for i, mid, image in reversed(list(zip(coarse, mids, many(mids)))):
             u.insert(i + 1, mid)
-            seen.insert(i + 1, look(mid))
+            seen.insert(i + 1, image)
     gone = np.concatenate([[0], np.cumsum(apart)])
     return np.interp(np.arange(frames) * gone[-1] / frames, gone, u + [1.0]), int((apart > step).sum())
 

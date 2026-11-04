@@ -3,7 +3,9 @@ crops, steered by the lab's material space, and drawn back to pictures by RAE's 
 
     python tokendit.py train --crops crops-yellow3 --decoder rae/ViTXL_n08/model.pt --out tokendit/ --hours 3
     python tokendit.py sample --model tokendit/last.pt --decoder rae/ViTXL_n08/model.pt --space texture-ip-sd15.npz \\
-        --places 12 --per 4 --guide 3 --upscale esrgan/RealESRGAN_x4plus.pth --out tokendit/samples/
+        --places 12 --per 4 --guide 3 --grid 32x48 --upscale esrgan/RealESRGAN_x4plus.pth --out tokendit/samples/
+    python tokendit.py walk --model tokendit/ema-036390.pt --decoder rae/ViTXL_n08/model.pt --space texture-ip-sd15.npz \\
+        --stops 12 --seconds 90 --grid 16x24 --upscale esrgan/RealESRGAN_x4plus.pth --out exports/tokendit/walk.mp4
 
 This is stage two of Zheng, Ma, Tong and Xie, "Diffusion Transformers with Representation Autoencoders"
 (2025), at the size of their DiT^DH-S, written out here: no code from their release runs. A 16 x 16
@@ -13,6 +15,12 @@ condition, under a wide, shallow head (2 blocks at 2048) that reads the noisy gr
 token by token by what the narrow one made of it. Flow matching with velocity prediction; noise
 levels drawn logit-normal and shifted toward noise by sqrt(16 * 16 * 768 / 4096), as the paper does
 for a latent this size; 50 Euler steps to sample.
+
+It is trained on 16 x 16 grids only. Any other grid is drawn in overlapping 16 x 16 windows whose
+velocities are cross-faded at every step, so each window sees the positions it was trained on and
+neighbours agree where they overlap: a 32 x 48 grid (512 x 768, 2048 x 3072 enlarged) comes out one
+seamless texture with larger forms than a window holds. Stretching the positions over the bigger
+grid instead holds at 16 x 24 and turns to brown mud at 32 x 48.
 
 The condition is a place in the lab's material space (CLIP ViT-H, as `fastgan.py --look` takes it):
 each crop's own, or half the time its photograph's mean, so a preset, a photograph or any mix of
@@ -117,15 +125,24 @@ class TokenDiT(nn.Module):
             nn.init.zeros_(layer.weight)
             nn.init.zeros_(layer.bias)
 
+    def corner(self, rows, cols):
+        """Which of the trained grid's positions a smaller grid takes: its top-left corner."""
+        return (torch.arange(rows)[:, None] * self.side + torch.arange(cols)).flatten().to(self.pos0.device)
+
     def timestep(self, sigma):
         half = 128
         freqs = torch.exp(-math.log(10000) * torch.arange(half, device=sigma.device, dtype=torch.float32) / half)
         a = sigma.float()[:, None] * 1000 * freqs
         return self.t_embed(torch.cat([a.cos(), a.sin()], 1))
 
-    def forward(self, x, sigma, place=None, keep=None):
+    def forward(self, x, sigma, place=None, keep=None, grid=None):
         """x: [b, 256, 768] noisy normalised tokens; sigma: [b] noise level; place: [b, 1024] unit places or
-        None (no material); keep: [b] booleans, False where the place is dropped."""
+        None (no material); keep: [b] booleans, False where the place is dropped; grid: (rows, cols) when
+        x is a grid smaller than the trained one."""
+        pos0, pos1, cos0, sin0, cos1, sin1 = self.pos0, self.pos1, self.cos0, self.sin0, self.cos1, self.sin1
+        if grid is not None and tuple(grid) != (self.side, self.side):
+            i = self.corner(*grid)
+            pos0, pos1, cos0, sin0, cos1, sin1 = pos0[:, i], pos1[:, i], cos0[i], sin0[i], cos1[i], sin1[i]
         t = self.timestep(sigma)
         if place is None:
             y = self.null.expand(len(x), -1)
@@ -134,13 +151,13 @@ class TokenDiT(nn.Module):
             if keep is not None:
                 y = torch.where(keep[:, None], y, self.null.expand_as(y))
         c = t + y
-        s = self.s_embed(x) + self.pos0
+        s = self.s_embed(x) + pos0
         for block in self.body:
-            s = block(s, c, self.cos0, self.sin0)
+            s = block(s, c, cos0, sin0)
         s = self.lift(s)
-        h = self.x_embed(x) + self.pos1
+        h = self.x_embed(x) + pos1
         for block in self.head:
-            h = block(h, s, self.cos1, self.sin1)
+            h = block(h, s, cos1, sin1)
         shift, scale = self.final_ada(F.silu(s)).chunk(2, -1)
         return self.out(self.final_norm(h) * (1 + scale) + shift)
 
@@ -184,25 +201,64 @@ def encode(rae, pixels):
     return rae.encoder(pixel_values=x).last_hidden_state[:, 5:].float()
 
 
+def windows(n, side, overlap=8):
+    """Where the windows start along one side of a grid, as rae.py's decoder lays its own: one if the
+    side fits the trained grid, else as few as cover it with at least `overlap` tokens shared."""
+    if n <= side:
+        return [0]
+    k = math.ceil((n - side) / (side - overlap)) + 1
+    return [round(i * (n - side) / (k - 1)) for i in range(k)]
+
+
+def guided(model, x, sigma, places, guide, grid=None):
+    """The velocity for grids no bigger than the trained one, pushed away from "no material" by `guide`."""
+    b = len(x)
+    sigma = sigma.expand(b)
+    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=x.is_cuda):
+        if places is None or guide == 1:
+            return model(x, sigma, places, grid=grid).float()
+        on = torch.ones(b, dtype=torch.bool, device=x.device)
+        both = model(torch.cat([x, x]), torch.cat([sigma, sigma]), torch.cat([places, places]), torch.cat([on, ~on]), grid=grid)
+    cond, free = both.float().chunk(2)
+    return free + guide * (cond - free)
+
+
+def velocity(model, x, sigma, places, guide, rows, cols, chunk=128):
+    """The guided velocity over a grid of any size: the trained grid's windows over it, each weighed most
+    in its middle and fading over the overlap, so neighbours cross-fade (a grid that fits is one window)."""
+    side, b = model.side, len(x)
+    if (rows, cols) == (side, side):
+        return guided(model, x, sigma, places, guide)
+    hh, ww = min(rows, side), min(cols, side)
+    at = [(y, c) for y in windows(rows, side) for c in windows(cols, side)]
+    g = x.view(b, rows, cols, -1)
+    pieces = torch.stack([g[:, y:y + hh, c:c + ww] for y, c in at], 1).reshape(b * len(at), hh * ww, -1)
+    near = None if places is None else places.repeat_interleave(len(at), 0)
+    v = torch.cat([guided(model, pieces[j:j + chunk], sigma, None if near is None else near[j:j + chunk], guide, (hh, ww))
+                   for j in range(0, len(pieces), chunk)]).view(b, len(at), hh, ww, -1)
+    ramp = lambda n: torch.minimum(torch.arange(n) + 1.0, n - torch.arange(n).float()).clamp(max=8).to(x.device)  # noqa: E731
+    weight = (ramp(hh)[:, None] * ramp(ww)[None])[..., None]
+    out, total = torch.zeros_like(g), torch.zeros(rows, cols, 1, device=x.device)
+    for k, (y, c) in enumerate(at):
+        out[:, y:y + hh, c:c + ww] += v[:, k] * weight
+        total[y:y + hh, c:c + ww] += weight
+    return (out / total).reshape(b, rows * cols, -1)
+
+
 @torch.no_grad()
-def sample(model, places, steps=50, guide=3.0, generator=None, mean=None, std=None, count=1):
+def sample(model, places, steps=50, guide=3.0, generator=None, mean=None, std=None, count=1, grid=None, noise=None):
     """Token grids for these places ([b, 1024] unit vectors), or `count` of them with no material: Euler
-    from noise, guided away from "no material" by `guide`."""
+    from noise, guided away from "no material" by `guide`. `grid` (rows, cols) is any size, drawn in
+    windows of the trained one; `noise` holds the start fixed, as a walk wants."""
     p = next(model.parameters())
+    rows, cols = grid or (model.side, model.side)
     b = len(places) if places is not None else count
-    x = torch.randn(b, model.side ** 2, model.channels, generator=generator, device=p.device)
+    if noise is None:
+        noise = torch.randn(b, rows * cols, model.channels, generator=generator, device=p.device)
+    x = noise.to(p.device, torch.float32).expand(b, -1, -1).clone()
     levels = shifted(torch.linspace(1, 0, steps + 1, device=p.device))
     for i in range(steps):
-        sigma = levels[i].expand(b)
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=p.is_cuda):
-            if places is None or guide == 1:
-                v = model(x, sigma, places)
-            else:
-                both = model(torch.cat([x, x]), torch.cat([sigma, sigma]), torch.cat([places, places]),
-                             torch.cat([torch.ones(b, dtype=torch.bool, device=p.device), torch.zeros(b, dtype=torch.bool, device=p.device)]))
-                cond, free = both.float().chunk(2)
-                v = free + guide * (cond - free)
-        x = x + (levels[i + 1] - levels[i]) * v.float()
+        x = x + (levels[i + 1] - levels[i]) * velocity(model, x, levels[i], places, guide, rows, cols)
     return x * std + mean if mean is not None else x
 
 
@@ -315,6 +371,78 @@ def train(args):
     print("done", step, flush=True)
 
 
+def walk(args, model, rae, mean, std):
+    """A film along a closed loop through the most typical photographs of as many regions of the space,
+    the noise held: one drawing whose material changes, paced so it moves as much from each frame to the
+    next. Written to args.out, with its record beside it."""
+    import json
+    import subprocess
+
+    import flights
+    import rae as R
+
+    places, files = flights.photographs(dict(np.load(args.space)), args.stops, np.random.default_rng(args.seed))
+    places /= np.linalg.norm(places, axis=1, keepdims=True)
+    order = flights.loop_order(places)
+    places, files = places[order], [files[i] for i in order]
+    stops = [torch.from_numpy(x.astype(np.float32)).cuda() for x in places]
+    rows, cols = args.grid
+    noise = torch.randn(1, rows * cols, model.channels, generator=torch.Generator(device="cuda").manual_seed(args.seed), device="cuda")
+
+    def route(us):
+        v = torch.stack([R.along(stops, u) for u in us])
+        return v / v.norm(dim=1, keepdim=True)
+
+    def drawn(us):
+        z = sample(model, route(us), args.steps, args.guide, mean=mean, std=std, grid=(rows, cols), noise=noise)
+        return rae.decode(R.renorm(z), (rows, cols))
+
+    def looks(us):
+        """Small copies of the route at these moments, drawn in batches."""
+        out = []
+        for j in range(0, len(us), args.batch):
+            out += [image.reshape(rows * 4, 4, cols * 4, 4, 3).mean((1, 3)) for image in drawn(us[j:j + args.batch])]
+        return out
+
+    frames = round(args.seconds * args.fps)
+    print(f"{len(files)} photographs, grid {rows} x {cols}", flush=True)
+    moments, lurches = flights.steady(lambda u: looks([u])[0], frames, dense=2, rounds=2, many=looks)
+    print(f"timed: {lurches} jumps still larger than a frame's move", flush=True)
+    net = None
+    if args.upscale:
+        import upscale
+
+        net = upscale.load(args.upscale)
+    out = pathlib.Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    writer, moved, last, start = None, [], None, None
+    for j in range(0, frames, args.batch):
+        for image in drawn(list(moments[j:j + args.batch])):
+            shown = np.clip(upscale.enlarge(net, image) if net is not None else image, 0, 1)
+            shown = Image.fromarray((shown * 255).round().astype(np.uint8))
+            if writer is None:
+                writer = subprocess.Popen(
+                    ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "%dx%d" % shown.size,
+                     "-r", str(args.fps), "-i", "-", "-c:v", "libx264", "-preset", "slow", "-crf", str(args.crf),
+                     "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)], stdin=subprocess.PIPE)
+                start, made = image, list(shown.size)
+            writer.stdin.write(shown.tobytes())
+            if last is not None:
+                moved.append(float(np.abs(image - last).mean()))
+            last = image
+        print(f"frame {min(j + args.batch, frames)} / {frames}", flush=True)
+    moved.append(float(np.abs(start - last).mean()))  # the seam, back to the start
+    writer.stdin.close()
+    writer.wait()
+    moved = np.array(moved)
+    passes = [float(np.interp(k / len(files), moments, np.arange(frames))) / args.fps for k in range(len(files))]
+    out.with_suffix(".json").write_text(json.dumps(dict(
+        files=files, seconds=args.seconds, fps=args.fps, frames=frames, size=made, grid=[rows, cols], seed=args.seed,
+        guide=args.guide, steps=args.steps, passes=np.round(passes, 2).tolist(), moved=np.round(moved, 5).tolist(),
+        evenness=float(moved.std() / moved.mean()), lurches=lurches, moments=np.round(moments, 7).tolist())), encoding="utf-8")
+    print(f"{out}: {frames} frames, evenness {moved.std() / moved.mean():.3f}", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -338,6 +466,24 @@ def main():
     s.add_argument("--steps", type=int, default=50)
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--upscale", help="Real-ESRGAN x4 weights, to enlarge every picture.")
+    w = sub.add_parser("walk")
+    w.add_argument("--model", required=True)
+    w.add_argument("--decoder", required=True)
+    w.add_argument("--space", required=True, help="The lab's space (.npz): the walk goes through its photographs' places.")
+    w.add_argument("--stops", type=int, default=12, help="How many photographs, one per region of the space.")
+    w.add_argument("--seed", type=int, default=0, help="Other photographs, and other noise held through the walk.")
+    w.add_argument("--seconds", type=float, default=60.0)
+    w.add_argument("--fps", type=int, default=24)
+    w.add_argument("--guide", type=float, default=3.0)
+    w.add_argument("--steps", type=int, default=30)
+    w.add_argument("--batch", type=int, default=16, help="Frames drawn at once.")
+    w.add_argument("--upscale", help="Real-ESRGAN x4 weights, to enlarge every frame.")
+    w.add_argument("--crf", type=int, default=18)
+    w.add_argument("--out", required=True, help="An .mp4.")
+    for p in (s, w):
+        p.add_argument("--grid", default="16x16", type=lambda v: tuple(int(x) for x in v.split("x")),
+                       help="Rows x columns of tokens, 16 pixels each: 16x16 is what it was trained on, 32x48 a "
+                            "3:2 at 512 x 768, drawn in its windows.")
     args = ap.parse_args()
     if args.cmd == "train":
         return train(args)
@@ -348,6 +494,8 @@ def main():
     model = TokenDiT().cuda().eval()
     model.load_state_dict(state["ema"])
     rae = R.RAE(args.decoder)
+    if args.cmd == "walk":
+        return walk(args, model, rae, state["mean"].cuda(), state["std"].cuda())
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     places, names = None, ["no material"]
@@ -364,8 +512,8 @@ def main():
     gen = torch.Generator(device="cuda").manual_seed(args.seed)
     for k in range(len(names)):
         p = None if places is None else places[k:k + 1].expand(args.per, -1)
-        z = sample(model, p, args.steps, args.guide, gen, state["mean"].cuda(), state["std"].cuda(), args.per)
-        for j, image in enumerate(rae.decode(z)):
+        z = sample(model, p, args.steps, args.guide, gen, state["mean"].cuda(), state["std"].cuda(), args.per, args.grid)
+        for j, image in enumerate(rae.decode(R.renorm(z), args.grid)):
             if net is not None:
                 image = upscale.enlarge(net, image)
             Image.fromarray((image * 255).round().astype(np.uint8)).save(out / f"{k:02d}-{j}.jpg", quality=92)

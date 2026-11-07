@@ -33,6 +33,9 @@ import numpy as np
 import torch
 from PIL import Image
 
+from loadlock import LOAD
+from models import MODELS
+
 SAM = "facebook/sam2.1-hiera-small"
 DINO = "IDEA-Research/grounding-dino-tiny"
 CLIPSEG = "CIDAS/clipseg-rd64-refined"
@@ -103,50 +106,57 @@ class Segmenter:
 
     # ---- the models, each loaded once ----
     def model(self, name):
+        with LOAD:  # loadlock.py: never beside another model's load
+            got = self._model(name)
+        MODELS.used("mask: " + name)
+        return got
+
+    def _model(self, name):
         if name not in self.models:
-            if name == "person":
-                import onnxruntime as ort
+            with MODELS.loading("mask: " + name, lambda: self.models.pop(name, None), self.lock, guess=1.0):
+                if name == "person":
+                    import onnxruntime as ort
 
-                self.models[name] = ort.InferenceSession(
-                    str(PERSON), providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
-            elif name == "sam":
-                from transformers import Sam2Model, Sam2Processor
+                    self.models[name] = ort.InferenceSession(
+                        str(PERSON), providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+                elif name == "sam":
+                    from transformers import Sam2Model, Sam2Processor
 
-                self.models[name] = (Sam2Processor.from_pretrained(SAM),
-                                     Sam2Model.from_pretrained(SAM).to(self.device).eval())
-            elif name == "dino":
-                from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+                    self.models[name] = (Sam2Processor.from_pretrained(SAM),
+                                         Sam2Model.from_pretrained(SAM).to(self.device).eval())
+                elif name == "dino":
+                    from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
-                self.models[name] = (AutoProcessor.from_pretrained(DINO),
-                                     AutoModelForZeroShotObjectDetection.from_pretrained(DINO).to(self.device).eval())
-            elif name == "clipseg":
-                from transformers import CLIPSegForImageSegmentation, CLIPSegProcessor
+                    self.models[name] = (AutoProcessor.from_pretrained(DINO),
+                                         AutoModelForZeroShotObjectDetection.from_pretrained(DINO).to(self.device).eval())
+                elif name == "clipseg":
+                    from transformers import CLIPSegForImageSegmentation, CLIPSegProcessor
 
-                self.models[name] = (CLIPSegProcessor.from_pretrained(CLIPSEG),
-                                     CLIPSegForImageSegmentation.from_pretrained(CLIPSEG).to(self.device).eval())
-            elif name == "subject":
-                from transformers import AutoModelForImageSegmentation
+                    self.models[name] = (CLIPSegProcessor.from_pretrained(CLIPSEG),
+                                         CLIPSegForImageSegmentation.from_pretrained(CLIPSEG).to(self.device).eval())
+                elif name == "subject":
+                    from transformers import AutoModelForImageSegmentation
 
-                self.models[name] = AutoModelForImageSegmentation.from_pretrained(
-                    SUBJECT, revision=SUBJECT_REV, trust_remote_code=True).to(self.device).eval().half()
-            elif name == "body":
-                from huggingface_hub import snapshot_download
-                from transformers import Sapiens2ForSemanticSegmentation, Sapiens2ImageProcessor
+                    self.models[name] = AutoModelForImageSegmentation.from_pretrained(
+                        SUBJECT, revision=SUBJECT_REV, trust_remote_code=True).to(self.device).eval().half()
+                elif name == "body":
+                    from huggingface_hub import snapshot_download
+                    from transformers import Sapiens2ForSemanticSegmentation, Sapiens2ImageProcessor
 
-                where = snapshot_download(BODY, allow_patterns=["config.json", "preprocessor_config.json",
-                                                                "model.safetensors"])
-                self.models[name] = (Sapiens2ImageProcessor.from_pretrained(where),
-                                     Sapiens2ForSemanticSegmentation.from_pretrained(
-                                         where, torch_dtype=torch.float16).to(self.device).eval())
-            elif name == "features":
-                from transformers import AutoModel
+                    where = snapshot_download(BODY, allow_patterns=["config.json", "preprocessor_config.json",
+                                                                    "model.safetensors"])
+                    self.models[name] = (Sapiens2ImageProcessor.from_pretrained(where),
+                                         Sapiens2ForSemanticSegmentation.from_pretrained(
+                                             where, torch_dtype=torch.float16).to(self.device).eval())
+                elif name == "features":
+                    from transformers import AutoModel
 
-                self.models[name] = AutoModel.from_pretrained(DINO_FEATURES).to(self.device).eval()
-            elif name == "vitmatte":
-                from transformers import VitMatteForImageMatting, VitMatteImageProcessor
+                    self.models[name] = AutoModel.from_pretrained(DINO_FEATURES).to(self.device).eval()
+                elif name == "vitmatte":
+                    from transformers import VitMatteForImageMatting, VitMatteImageProcessor
 
-                self.models[name] = (VitMatteImageProcessor.from_pretrained(VITMATTE),
-                                     VitMatteForImageMatting.from_pretrained(VITMATTE).to(self.device).eval())
+                    self.models[name] = (VitMatteImageProcessor.from_pretrained(VITMATTE),
+                                         VitMatteForImageMatting.from_pretrained(VITMATTE).to(self.device).eval())
             print(f"  segmentation: {name} up")
         return self.models[name]
 

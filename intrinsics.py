@@ -21,6 +21,8 @@ import threading
 import numpy as np
 import torch
 
+from models import MODELS
+
 MODEL = "prs-eth/marigold-iid-lighting-v1-1"
 SIDE = 768
 KEEP = 32
@@ -44,10 +46,12 @@ class Intrinsics:
             if self.pipe is None:
                 from diffusers import MarigoldIntrinsicsPipeline
 
-                self.pipe = MarigoldIntrinsicsPipeline.from_pretrained(
-                    MODEL, variant="fp16", torch_dtype=torch.float16).to(self.device)
+                with MODELS.loading("intrinsics: Marigold-IID", lambda: setattr(self, "pipe", None), self.lock, guess=3.0):
+                    self.pipe = MarigoldIntrinsicsPipeline.from_pretrained(
+                        MODEL, variant="fp16", torch_dtype=torch.float16).to(self.device)
                 self.pipe.set_progress_bar_config(disable=True)
                 print("  intrinsics: Marigold-IID up")
+            MODELS.used("intrinsics: Marigold-IID")
             image = picture().convert("RGB")
             with torch.no_grad():
                 got = self.pipe(image, generator=torch.Generator(self.device).manual_seed(0)).prediction

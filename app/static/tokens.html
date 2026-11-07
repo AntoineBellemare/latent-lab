@@ -38,6 +38,7 @@
 
     <div class="card" id="combineCard">
       <div class="lab">combine <span class="hintline">the tokens</span></div>
+      <div class="row" id="encoderRow" hidden><span class="k">model</span><div class="seg small grow" id="encoderSeg" role="group" aria-label="which model's tokens"></div></div>
       <div id="combine" class="args"></div>
     </div>
 
@@ -51,7 +52,6 @@
     <div id="go">
       <div class="row"><span class="k">size</span><div class="seg small grow" id="sizeSeg" role="group" aria-label="working size"></div></div>
       <div class="row" id="frameRow"><span class="k">frame</span><div class="seg small grow" id="frameSeg" role="group" aria-label="frame"></div></div>
-      <div class="row" id="encoderRow" hidden><span class="k">tokens</span><div class="seg small grow" id="encoderSeg" role="group" aria-label="whose tokens"></div></div>
       <div class="row" id="enlargeRow"></div>
       <div class="row">
         <button id="keep" class="primary" title="keep this frame: it goes in the history (K)">keep</button>

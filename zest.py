@@ -66,12 +66,15 @@ class Transfer:
             from diffusers import (AutoencoderKL, ControlNetModel, DPMSolverMultistepScheduler,
                                    StableDiffusionXLControlNetInpaintPipeline)
 
-            net = ControlNetModel.from_pretrained(DEPTH, torch_dtype=self.dtype)
-            vae = AutoencoderKL.from_pretrained(VAE, torch_dtype=self.dtype)
-            pipe = StableDiffusionXLControlNetInpaintPipeline.from_pretrained(
-                BASE, controlnet=net, vae=vae, torch_dtype=self.dtype)
-            repo, sub, weight = ADAPTER
-            pipe.load_ip_adapter(repo, subfolder=sub, weight_name=weight, image_encoder_folder=None)
+            from models import MODELS
+
+            with MODELS.loading("transfer: SDXL", lambda: setattr(self, "pipe", None), self.lock, guess=12.0):
+                net = ControlNetModel.from_pretrained(DEPTH, torch_dtype=self.dtype)
+                vae = AutoencoderKL.from_pretrained(VAE, torch_dtype=self.dtype)
+                pipe = StableDiffusionXLControlNetInpaintPipeline.from_pretrained(
+                    BASE, controlnet=net, vae=vae, torch_dtype=self.dtype)
+                repo, sub, weight = ADAPTER
+                pipe.load_ip_adapter(repo, subfolder=sub, weight_name=weight, image_encoder_folder=None)
             # Ten gigabytes of SDXL beside the lab's other models would fill the card, and a full
             # card on Windows spills into shared memory and slows every job to a crawl. The
             # pipeline lives in RAM and each model visits the GPU only while it runs: a second or
@@ -81,6 +84,9 @@ class Transfer:
             pipe.set_progress_bar_config(disable=True)
             self.pipe = pipe
             print("  transfer pipeline up (SDXL + depth + ViT-H adapter)")
+        from models import MODELS
+
+        MODELS.used("transfer: SDXL")
         return self.pipe
 
     def look(self, folder, weight):

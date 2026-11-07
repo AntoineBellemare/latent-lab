@@ -1095,7 +1095,18 @@ CARRIES = {"tokens": "the material's own tokens: its drawing replaces the pictur
            "statistics": "the picture's tokens given the material's statistics (each channel's mean and spread over "
                          "the grid): the picture's layout, the material's character",
            "direction": "the picture's tokens moved along the material's mean direction (its mean token minus the "
-                        "picture's): the picture, pushed toward the material"}
+                        "picture's): the picture, pushed toward the material",
+           "transport": "the picture's tokens given the material's whole distribution (sliced optimal transport): "
+                        "each token keeps its rank and takes the material's values, extremes included",
+           "tone axes": "the material's first four principal axes in the picture's tokens (in FLUX.2's VAE its "
+                        "tonality: light, colour, contrast, crispness), the picture's rest",
+           "detail axes": "the material's principal axes 5 to 24 in the picture's tokens: its finer structure, the "
+                          "picture's tone",
+           "surface axes": "the material's principal axes 1 to 24 in the picture's tokens: its whole surface on the "
+                           "picture's forms"}
+AXES_SPANS = {"tone axes": (0, 4), "detail axes": (4, 24), "surface axes": (0, 24)}
+LOOKS = {"crispness": "soft haze (less) to sharp grain (more)", "warmth": "cooler (less) to warmer (more)",
+         "exposure": "darker (less) to lighter (more)", "contrast": "flatter (less) to deeper (more)"}
 OPERATIONS = {"replace": "the picture's token moved toward the material's by its share: a straight mix along the chord",
               "slerp": "along the arc between the two tokens instead of the chord: the mix keeps a token's full "
                        "length, so halfway is as vivid as either end",
@@ -1105,18 +1116,41 @@ OPERATIONS = {"replace": "the picture's token moved toward the material's by its
               "multiply": "the two tokens multiplied channel by channel: only what both carry stays strong",
               "max": "each channel the larger of the two: whatever either carries most",
               "min": "each channel the smaller of the two: only what both carry",
-              "difference": "each channel the distance between the two: where they disagree"}
+              "difference": "each channel the distance between the two: where they disagree",
+              "split": "the picture's broad forms and light with the material's fine detail, each grid split at "
+                       "`split size` tokens"}
 WEIGHTS = {"texture": "weight", "textureB": "weight_b", "textureC": "weight_c"}  # each material's weight param
 
 
-def combined(p, m, t, how):
-    """The picture's tokens `p` and a material's `m` ([tokens, 768]) combined by `how`, by `t` per
-    token ([tokens, 1], 0..1): at 0 the picture's token, at 1 the operation's whole result. Every
-    result is put back on the encoder's shell when it is decoded, as goofi's DinoDecode does, so a
-    sum or a product lands where real tokens lie."""
+def token_blur(z, grid, sigma):
+    """A [tokens, D] grid blurred over its rows and columns (Gaussian, `sigma` tokens, mirrored edges)."""
     import torch
     import torch.nn.functional as F
 
+    rows, cols = grid
+    k = max(3, int(sigma * 3) * 2 + 1)
+    x = torch.arange(k, device=z.device, dtype=z.dtype) - k // 2
+    g = torch.exp(-x ** 2 / (2 * float(sigma) ** 2))
+    g = g / g.sum()
+    a = z.T.reshape(1, -1, rows, cols)
+    d = a.shape[1]
+    a = F.conv2d(F.pad(a, (k // 2, k // 2, 0, 0), mode="reflect"), g.view(1, 1, 1, k).repeat(d, 1, 1, 1), groups=d)
+    a = F.conv2d(F.pad(a, (0, 0, k // 2, k // 2), mode="reflect"), g.view(1, 1, k, 1).repeat(d, 1, 1, 1), groups=d)
+    return a.reshape(d, -1).T
+
+
+def combined(p, m, t, how, grid=None, size=1.5):
+    """The picture's tokens `p` and a material's `m` ([tokens, D]) combined by `how`, by `t` per
+    token ([tokens, 1], 0..1): at 0 the picture's token, at 1 the operation's whole result. Every
+    result is put back where real tokens lie before it is drawn: on RAE's shell, as goofi's
+    DinoDecode does, or with each channel's spread restored in FLUX.2's VAE (`settled`). `split`
+    needs the grid's (rows, cols) and splits at `size` tokens."""
+    import torch
+    import torch.nn.functional as F
+
+    if how == "split":
+        target = token_blur(p, grid, size) + m - token_blur(m, grid, size)
+        return p + t * (target - p)
     if how == "add":
         return p + t * m
     if how == "subtract":
@@ -1139,6 +1173,75 @@ def combined(p, m, t, how):
         target = {"max": lambda: torch.maximum(p, m), "min": lambda: torch.minimum(p, m),
                   "difference": lambda: (p - m).abs()}.get(how, lambda: m)()
     return p + t * (target - p)
+
+
+def settled(space, z, sources, weights):
+    """A mix put back where the space's real tokens lie: FLUX.2's VAE restores each channel's spread
+    (fluxvae.settle); RAE's tokens are put on its shell when they are drawn, so they go as they are."""
+    return space.settle(z, sources, weights) if hasattr(space, "settle") else z
+
+
+def transported(p, m, steps=64, seed=0):
+    """The picture's tokens `p` given the material's distribution `m` by sliced optimal transport: along
+    random orthonormal directions, each token's value moved to the material's value of the same rank."""
+    import torch
+
+    g = torch.Generator(device=p.device).manual_seed(seed)
+    z = p.clone()
+    idx = torch.linspace(0, len(m) - 1, len(p), device=p.device).round().long()
+    for _ in range(steps):
+        q, _ = torch.linalg.qr(torch.randn(p.shape[1], p.shape[1], generator=g, device=p.device))
+        a = z @ q
+        target = torch.empty_like(a)
+        target.scatter_(0, a.argsort(0), (m @ q).sort(0).values[idx])
+        z = z + (target - a) @ q.T
+    return z
+
+
+def space_axes(engine, space):
+    """A token space's principal axes over 48 of the textures, worked out once and kept beside the space
+    file, with which of the first axes are crispness, warmth, exposure and contrast (fluxvae.controls)."""
+    import random
+
+    import fluxvae
+
+    memo = engine.__dict__.setdefault("_axes", {})
+    key = str(getattr(space, "path", type(space).__name__))
+    if key not in memo:
+        names = list(engine.textures)
+        random.Random(0).shuffle(names)
+        pictures = [engine.load_frame(engine.texture_path(n), 512, 336) for n in names[:48]]
+        tag = "".join(c if c.isalnum() else "-" for c in pathlib.Path(key).parent.name or key)
+        ax = fluxvae.axes(space, pictures, pathlib.Path(engine.args.space).parent / f"axes-{tag}.npz")
+        memo[key] = (ax, fluxvae.controls(space, ax, pictures[0]))
+    return memo[key]
+
+
+def looked(engine, space, z, params):
+    """The tokens moved along the space's crispness, warmth, exposure and contrast axes, by each
+    control's setting in units of that axis's spread over the archive."""
+    if not any(float(params.get("look_" + k, 0) or 0) for k in LOOKS):
+        return z
+    (mu, basis, spread), ctl = space_axes(engine, space)
+    for name, (k, sign) in ctl.items():
+        v = float(params.get("look_" + name, 0) or 0)
+        if v:
+            z = z + (v * sign * spread[k]) * basis[k].to(z.dtype)
+    return z
+
+
+def looks_params(group):
+    """The four look controls, measured on each token space's own axes (`looked`)."""
+    return [P("look_" + k, "float", 0.0, -3, 3, 0.05, label=k, group=group,
+              doc=f"{doc}: the space's own {k} axis, in units of its spread over the archive") for k, doc in LOOKS.items()]
+
+
+def split_param(group):
+    return P("split_size", "float", 1.5, 0.5, 6, 0.1, label="split size", unit="tokens", group=group,
+             when=[["operation", "==", "split"]],
+             doc="where the picture's broad forms end and the material's fine detail begins, in tokens (16 px)")
+
+
 TIP = 0.15  # how far a weight tips a rebuilt piece's choice, in cosine: half the weight costs 0.1
 _tokens, _tokens_lock = collections.OrderedDict(), threading.Lock()
 
@@ -1189,16 +1292,30 @@ def nearest(z_pic, raws, w, contrast, inside=None):
     return torch.softmax(sim + bias, dim=1).T.cpu().numpy()       # [materials, tokens]
 
 
-def carried(z_mat, z_pic, params):
-    """What a material brings to the picture's grid: its own tokens, the picture's tokens given its
-    statistics, or the picture's tokens pushed along its mean direction. Every result is put back on
-    the encoder's shell when it is decoded."""
+def carried(z_mat, z_pic, params, axes=None):
+    """What a material brings to the picture's grid: its own tokens; the picture's tokens given its
+    statistics, its whole distribution (transport) or some of its principal axes; or the picture's
+    tokens pushed along its mean direction. `axes` (mean, basis, spread) for the axis carries."""
     how = params.get("carry", "tokens")
+    if how == "tokens":
+        return z_mat
     if how == "statistics":
-        return (z_pic - z_pic.mean(0)) / (z_pic.std(0) + 1e-6) * z_mat.std(0) + z_mat.mean(0)
-    if how == "direction":
-        return z_pic + float(params.get("push", 1.0)) * (z_mat.mean(0) - z_pic.mean(0))
-    return z_mat
+        target = (z_pic - z_pic.mean(0)) / (z_pic.std(0) + 1e-6) * z_mat.std(0) + z_mat.mean(0)
+    elif how == "direction":
+        target = z_pic + (z_mat.mean(0) - z_pic.mean(0))
+    elif how == "transport":
+        target = transported(z_pic, z_mat)
+    elif how in AXES_SPANS:
+        mu, basis, _ = axes
+        lo, hi = AXES_SPANS[how]
+        b = basis.to(z_pic.dtype)
+        cp, cm = (z_pic - mu) @ b.T, (z_mat - mu) @ b.T
+        cp[:, lo:hi] = cm[:, lo:hi]
+        target = cp @ b + mu
+    else:
+        return z_mat
+    # `push` walks from the picture's tokens to the carry's, and past them above 1.
+    return z_pic + float(params.get("push", 1.0)) * (target - z_pic)
 
 
 def tokens_of(key, rae, load, grid):
@@ -1265,8 +1382,10 @@ def order_of(engine, inputs, params, c, inside):
 
 ENCODERS = {"DINOv2": "RAE on DINOv2-B: the original, faster (21 frames a second at 768), redraws what it is given",
             "DINOv3": "RAEv2 on DINOv3-L, 23 layers: keeps the photograph's own detail and colour, slower (14 at 768)",
-            "DINOv3 k7": "RAEv2 on DINOv3-L's deeper half (7 layers): between the two, as fast as DINOv3"}
-ENCODER_FILES = {"DINOv3": "raev2", "DINOv3 k7": "raev2k7"}
+            "DINOv3 k7": "RAEv2 on DINOv3-L's deeper half (7 layers): between the two, as fast as DINOv3",
+            "FLUX.2 VAE": "FLUX.2's autoencoder: keeps each photograph's own grain almost exactly; a mix is settled "
+                          "channel by channel and reads as layers rather than one new surface"}
+ENCODER_FILES = {"DINOv3": "raev2", "DINOv3 k7": "raev2k7", "FLUX.2 VAE": "flux2vae"}
 
 
 def rae_of(files, params):
@@ -1340,25 +1459,40 @@ class TokenFrame:
         import torch
         import torch.nn.functional as F
 
-        out = decoded(self.engine, self.files, self.params, self.rae, z, (self.rows, self.cols))
+        # The picture is finished where it was drawn (on the card after an enlargement) and only its
+        # bytes come back; the zone is blurred at the working size and enlarged, which is the same
+        # blur as at full size for a sixteenth of the work.
+        out = decoded(self.engine, self.files, self.params, self.rae, z, (self.rows, self.cols), keep=True)
         if share.min() < 0.98:
             h, w = out.shape[:2]
             near = F.max_pool2d(torch.from_numpy((share > 0.02).astype(np.float32))[None, None], 3, 1, 1)
-            zone = F.interpolate(near, size=(h, w), mode="bilinear", align_corners=False)[0, 0].numpy()
-            zone = np.clip(masks.blur(zone, 6 * h / self.H), 0, 1)[..., None]
+            small = F.interpolate(near, size=(self.H, self.W), mode="bilinear", align_corners=False)[0, 0].numpy()
+            zone = torch.from_numpy(np.clip(masks.blur(small, 6.0), 0, 1).astype(np.float32))[None, None].to(out.device)
+            if (h, w) != (self.H, self.W):
+                zone = F.interpolate(zone, size=(h, w), mode="bilinear", align_corners=False)
             own = self.c if h == self.H else self.engine.load_frame(self.cpath, w, h)
-            out = zone * out + (1 - zone) * own
-        return cx.img(out)
+            zone = zone[0, 0, ..., None]
+            out = zone * out + (1 - zone) * torch.from_numpy(np.ascontiguousarray(own)).to(out.device, out.dtype)
+        return picture_of(out)
 
 
-def decoded(engine, files, params, rae, z, grid):
-    """Tokens drawn back to a picture, enlarged four times by Real-ESRGAN on release and in exports."""
-    import rae as R
+def decoded(engine, files, params, rae, z, grid, keep=False):
+    """Tokens drawn back to a picture, enlarged four times by Real-ESRGAN on release and in exports.
+    `keep`: a float tensor (on the card after an enlargement) instead of an array."""
+    import torch
 
     out = rae.decode(rae.shell(z.reshape(1, grid[0] * grid[1], -1)), grid)[0]
     if params.get("_export") or (params.get("enlarge") and not params.get("_drag")):
-        out = engine.enlarged(files["upscale"], out)
-    return out
+        return engine.enlarged(files["upscale"], out, keep)
+    return torch.from_numpy(out) if keep else out
+
+
+def picture_of(t):
+    """A [h, w, 3] float tensor in 0..1 as a picture, turned into bytes where it lies."""
+    import torch
+    from PIL import Image
+
+    return Image.fromarray((t.clamp(0, 1) * 255 + 0.5).to(torch.uint8).cpu().numpy())
 
 
 def column(a, like):
@@ -1397,12 +1531,17 @@ def _compose_runner(files):
             if m is not None:
                 tok = tok * fr.pool(m)[None]
             share = tok.sum(0)
+            axes = space_axes(engine, fr.rae)[0] if params.get("carry") in AXES_SPANS else None
             # The materials at each place, weighted into one token, then combined with the picture's.
-            mat = sum(carried(raw, z_pic, params) * column(t, z_pic) for raw, t in zip(raws, tok))
+            brought = [carried(raw, z_pic, params, axes) for raw in raws]
+            mat = sum(b * column(t, z_pic) for b, t in zip(brought, tok))
             mat = mat / column(np.maximum(share, 1e-6), z_pic)
-            z = combined(z_pic, mat, column(share, z_pic), params.get("operation", "replace"))
+            z = combined(z_pic, mat, column(share, z_pic), params.get("operation", "replace"),
+                         (fr.rows, fr.cols), float(params.get("split_size", 1.5)))
+            s = float(share.mean())
+            z = settled(fr.rae, z, [z_pic] + brought, [1 - s] + [s * float(t.mean()) / max(s, 1e-6) for t in tok])
             u = float(params["picture"])
-            return fr.drawn((1 - u) * z + u * z_pic, share)
+            return fr.drawn(looked(engine, fr.rae, (1 - u) * z + u * z_pic, params), share)
 
     return run
 
@@ -1437,11 +1576,13 @@ def laid(blocks, ny, nx, R, C):
     return blocks.reshape(ny, nx, D, b, b).permute(2, 0, 3, 1, 4).reshape(D, ny * b, nx * b)[:, :R, :C].permute(1, 2, 0)
 
 
-def rebuilt(target, source, b, pick, same, gen, bias=None):
+def rebuilt(target, source, b, pick, same, gen, bias=None, draw=None):
     """Each b x b block of the target grid ([rows, cols, 768]) replaced by the source's block, from
     anywhere in it, whose tokens are closest (cosine, token by token); with `pick` above 1, by one of
     that many closest, at random. `same`: the source is the target, so a block never takes itself.
-    `bias(rows, cols)`, when given, is added to each source block's closeness, by where it starts."""
+    `bias(rows, cols)`, when given, is added to each source block's closeness, by where it starts.
+    `draw`, a grid laid out as `source` in another token space, gives the blocks laid in place of the
+    source's own: the match is made in one space and drawn in the other."""
     import torch
     import torch.nn.functional as F
 
@@ -1459,6 +1600,8 @@ def rebuilt(target, source, b, pick, same, gen, bias=None):
     k = max(1, min(int(pick), sim.shape[1]))
     top = sim.topk(k, dim=1).indices
     choice = torch.randint(0, k, (len(top),), generator=gen).to(top.device)
+    if draw is not None:
+        s = pieces(draw.to(s.device), b, 1)[0]
     return laid(s[top[torch.arange(len(top), device=top.device), choice]], ny, nx, R, C)
 
 
@@ -1553,6 +1696,7 @@ def _hybrid_runner(files):
                     w = lineup(f, len(grids), float(params["balance"]), float(params["seam"]))
                     w = np.stack([masks.blur(x, 0.7) for x in w])
                 z = sum(g * column(x, g) for g, x in zip(grids, w))
+                z = settled(rae, z, grids, [float(x.mean()) for x in w])
             else:
                 first = grids[0].reshape(rows, cols, -1)
                 if way == "layout":
@@ -1562,7 +1706,8 @@ def _hybrid_runner(files):
                     moved = scattered(first, int(params["blocks"]), params["reach"], gen)
                 h = float(params["hold"])
                 z = ((1 - h) * moved + h * first).reshape(rows * cols, -1)
-            return cx.img(decoded(engine, files, params, rae, z, (rows, cols)))
+                z = settled(rae, z, [first.reshape(rows * cols, -1), moved.reshape(rows * cols, -1)], [h, 1 - h])
+            return cx.img(decoded(engine, files, params, rae, looked(engine, rae, z, params), (rows, cols)))
 
     return run
 
@@ -1617,15 +1762,27 @@ def _mosh_runner(files):
             src = fr.tokens(inputs["texture"]) if material else z_pic
             grid = lambda z: z.reshape(fr.rows, fr.cols, -1)  # noqa: E731
             way = params["way"]
+            # In FLUX.2's VAE, DINO's tokens decide which piece goes where (its matches follow what
+            # things are) and the VAE draws the piece it chose: the material's own grain, datamoshed.
+            vae = hasattr(fr.rae, "settle")
+            seen = fr.tokens
+            if vae and way == "rebuild":
+                dino, at = engine.rae(files["rae"]), (fr.rows, fr.cols)
+                seen = lambda name=None: (tokens_of(["picture", str(fr.cpath)], dino, lambda: fr.c, at) if name is None  # noqa: E731
+                                          else tokens_of(["material", name, params["zoom"], params["seed"]], dino,
+                                                         lambda: fr.crop(name), at))[0].float()
             if way == "rebuild" and material and len(slots) > 1:
                 # Every material searched at once, side by side; a weight tips which one a piece comes from.
                 w = weights_of(params, slots)
                 tip = torch.as_tensor([TIP * np.log(x / w.max()) if x > 0 else -9.0 for x in w], dtype=torch.float32)
-                wide = torch.cat([grid(fr.tokens(inputs[k])) for k in slots], 1)
+                wide = torch.cat([grid(seen(inputs[k])) for k in slots], 1)
+                drawn_from = torch.cat([grid(fr.tokens(inputs[k])) for k in slots], 1) if vae else None
                 owner = lambda sy, sx: tip[(torch.arange(sx) // fr.cols).clamp(max=len(slots) - 1)].repeat(sy)  # noqa: E731
-                moved = rebuilt(grid(z_pic), wide, int(params["blocks"]), params["pick"], False, gen, owner)
+                moved = rebuilt(grid(seen()), wide, int(params["blocks"]), params["pick"], False, gen, owner, drawn_from)
             elif way == "rebuild":
-                moved = rebuilt(grid(z_pic), grid(src), int(params["blocks"]), params["pick"], not material, gen)
+                looks_at = grid(seen(inputs["texture"]) if material else seen())
+                moved = rebuilt(grid(seen()), looks_at, int(params["blocks"]), params["pick"], not material, gen,
+                                draw=grid(src) if vae else None)
             elif way == "drag":
                 by = params["by"]
                 if by == "depth":
@@ -1644,9 +1801,10 @@ def _mosh_runner(files):
             changed = ((moved - z_pic).norm(dim=1) > 1e-3).float().cpu().numpy().reshape(fr.rows, fr.cols)
             share = share * changed * (1.0 - h)
             z = combined(z_pic, moved, column(np.full(fr.rows * fr.cols, 1.0 - h, np.float32), z_pic),
-                         params.get("operation", "replace"))
+                         params.get("operation", "replace"), (fr.rows, fr.cols), float(params.get("split_size", 1.5)))
+            z = settled(fr.rae, z, [z_pic, moved], [h, 1.0 - h])
             s = column(np.ones_like(share) if m is None else fr.pool(m), z)
-            return fr.drawn(s * z + (1 - s) * z_pic, share)
+            return fr.drawn(looked(engine, fr.rae, s * z + (1 - s) * z_pic, params), share)
 
     return run
 
@@ -2067,7 +2225,11 @@ def build(preset="sd15", root=None, manifest=None):
             v3 = manifest.get(key)
             if v3 and (pathlib.Path(root) / v3).is_file() and dinov3_ready():
                 files[key] = str(pathlib.Path(root) / v3)
-        # Which tokens: offered once DINOv3 and RAEv2's decoders are on disk; DINOv2's stays the default.
+        import fluxvae
+
+        if fluxvae.ready():
+            files["flux2vae"] = fluxvae.KEY
+        # Which tokens: offered once their models are on disk; DINOv2's stays the default.
         offered = [k for k in ENCODERS if k == "DINOv2" or ENCODER_FILES[k] in files]
         encoder = [P("encoder", "choice", "DINOv2", options=offered, label="tokens", group=OUT,
                      choices={k: ENCODERS[k] for k in offered},
@@ -2108,11 +2270,13 @@ def build(preset="sd15", root=None, manifest=None):
                     P("operation", "choice", "replace", options=list(OPERATIONS), label="operation", group="compose",
                       choices=OPERATIONS, doc="the arithmetic that combines the picture's token with the materials' "
                                               "at each place"),
+                    split_param("compose"),
                     P("carry", "choice", "tokens", options=list(CARRIES), label="carries", group="compose",
                       choices=CARRIES, doc="what each material brings into the picture's tokens"),
-                    P("push", "float", 1.0, 0, 2, 0.01, label="push", group="compose",
-                      when=[["carry", "==", "direction"]],
-                      doc="how far along the material's direction: 1 the material's mean, above 1 past it"),
+                    P("push", "float", 1.0, 0, 3, 0.01, label="push", group="compose",
+                      when=[["carry", "!=", "tokens"]],
+                      doc="how far the picture's tokens go toward what the material carries: 1 all the way (its "
+                          "statistics, distribution, direction or axes), above 1 past it, for a stronger effect"),
                     P("picture", "float", 0.0, 0, 1, 0.01, label="picture underneath", group="compose",
                       doc="how much of the picture's own tokens stay under the materials: slide it to morph from "
                           "the composition back to the picture"),
@@ -2121,6 +2285,7 @@ def build(preset="sd15", root=None, manifest=None):
                           "third of it (the GANs' crop); larger is coarser grain"),
                     P("seed", "seed", 0, label="crop", group="compose",
                       doc="where in each photograph its piece is taken: 0 the middle, ⚄ somewhere else")]
+                   + looks_params("compose")
                    + encoder
                    + [x for x in MASK if x["key"] != "harmonise"]
                    + [P("long", "choice", 768, options=[512, 768, 1024], label="working size", group=OUT,
@@ -2179,11 +2344,13 @@ def build(preset="sd15", root=None, manifest=None):
                       doc="how much of the picture's own tokens stay mixed into the mosh"),
                     P("operation", "choice", "replace", options=list(OPERATIONS), label="operation", group="mosh",
                       choices=OPERATIONS, doc="the arithmetic that combines the picture's token with the moved one"),
+                    split_param("mosh"),
                     P("zoom", "float", 1.0, 1, 6, 0.1, label="material zoom", group="mosh",
                       when=[["source", "==", "material"]],
                       doc="how close into the material photograph: 1 the whole of it across the frame"),
                     P("seed", "seed", 0, label="seed", group="mosh",
                       doc="another number: other random choices, and another piece of the material")]
+                   + looks_params("mosh")
                    + [x for x in MASK if x["key"] != "harmonise"]
                    + [G(next(x for x in methods[-1]["params"] if x["key"] == "long"), OUT),
                       G(next(x for x in methods[-1]["params"] if x["key"] == "enlarge"), OUT)] + encoder,
@@ -2222,7 +2389,7 @@ def build(preset="sd15", root=None, manifest=None):
                     P("seed", "seed", 0, label="seed", group="hybrid",
                       doc="another number: another pattern, other random choices, other pieces of the materials"),
                     P("frame", "choice", "3:2", options=list(FRAMES), label="frame", group=OUT,
-                      doc="the texture's shape")] + out_params,
+                      doc="the texture's shape")] + looks_params("hybrid") + out_params,
             run=_hybrid_runner(files)))
         drawn = {k: manifest.get(k) for k in ("tokendit", "rae256")}
         if all(drawn.values()) and (pathlib.Path(root) / drawn["rae256"]).is_file() and \

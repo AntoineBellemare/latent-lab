@@ -28,6 +28,7 @@ from .live import Live
 from .registry import build, public, GROUPS, LAYOUT
 
 LAB = pathlib.Path(__file__).resolve().parent.parent
+FRAMES_BYTES = 1_200_000_000  # the photographs kept decoded, as floats, for the sliders
 
 # Windows reads these from the registry, where .js is often text/plain — and a browser refuses to
 # run a module served as text/plain. Say it explicitly.
@@ -62,19 +63,30 @@ class LabEngine:
         engine._enlarger = None
         engine._tokendit = None
         engine.rae_lock = threading.RLock()  # one frame at a time on the decoder, from any socket
+        from models import MODELS
+
+        MODELS.add("photo frames", engine._arrs.clear, engine._arr_lock)
         return engine
 
     def rae(self, decoder):
         """RAE's decoder and DINOv2's encoder (rae.py), or RAEv2's and DINOv3's (raev2.py), loaded on first
         use: one to two gigabytes in half precision, one per decoder (the 512 composes, the 256 draws the
-        generator's grids, RAEv2's composes in DINOv3)."""
+        generator's grids, RAEv2's composes in DINOv3). FLUX.2's VAE (fluxvae.py) is the token space
+        named by `fluxvae.KEY` in place of a path."""
+        import fluxvae
         import rae
+        from models import MODELS
 
+        name = "tokens: FLUX.2 VAE" if decoder == fluxvae.KEY else "tokens: " + pathlib.Path(decoder).parent.name
         with self.loading:
-            if decoder not in self._raes:
-                self._raes[decoder] = rae.load(decoder, str(self.device))
-                print("  rae up:", pathlib.Path(decoder).parent.name)
-        return self._raes[decoder]
+            got = self._raes.get(decoder)
+            if got is None:
+                with MODELS.loading(name, lambda: self._raes.pop(decoder, None), self.rae_lock, guess=2.5):
+                    got = fluxvae.FluxVAE(str(self.device)) if decoder == fluxvae.KEY else rae.load(decoder, str(self.device))
+                self._raes[decoder] = got
+                print("  " + name + " up")
+        MODELS.used(name)
+        return got
 
     def tokendit(self, folder):
         """The token generator (tokendit.py) at its newest checkpoint in the folder (or its published
@@ -82,26 +94,36 @@ class LabEngine:
         mean, std, step)."""
         import tokendit
 
+        from models import MODELS
+
         newest = max(pathlib.Path(folder).glob("ema-*.pt"), default=None) or max(pathlib.Path(folder).glob("*.safetensors"))
         with self.loading:
-            if self._tokendit is None or self._tokendit[0] != newest:
-                model, mean, std, step = tokendit.load(newest, self.device)
-                self._tokendit = (newest, model, mean, std, step)
+            got = self._tokendit
+            if got is None or got[0] != newest:
+                with MODELS.loading("token generator", lambda: setattr(self, "_tokendit", None), self.rae_lock, guess=1.0):
+                    model, mean, std, step = tokendit.load(newest, self.device)
+                got = self._tokendit = (newest, model, mean, std, step)
                 print(f"  tokendit up: step {step}")
-        return self._tokendit
+        MODELS.used("token generator")
+        return got
 
-    def enlarged(self, weights, image):
+    def enlarged(self, weights, image, keep=False):
         """A picture made four times larger by Real-ESRGAN (upscale.py), loaded on first use. At 3072 x 2048
-        its activations take a few gigabytes, so the editor's image model steps off the card first."""
+        its activations take a few gigabytes, so the editor's image model steps off the card first.
+        `keep`: the result stays on the card as a tensor, for a caller that finishes it there."""
         import upscale
+        from models import MODELS
 
         with self.loading:
-            if self._enlarger is None:
-                self._enlarger = upscale.load(weights, self.device.type)
+            net = self._enlarger
+            if net is None:
+                with MODELS.loading("enlarge: Real-ESRGAN", lambda: setattr(self, "_enlarger", None), self.rae_lock, guess=1.0):
+                    net = self._enlarger = upscale.load(weights, self.device.type)
                 print("  real-esrgan up")
+        MODELS.used("enlarge: Real-ESRGAN")
         self.make_room()
         with self.rae_lock:
-            return upscale.enlarge(self._enlarger, image)
+            return upscale.enlarge(net, image, keep)
 
     def segment(self, name, kind, arg, width, height):
         """An AI mask (segment.py) for this picture, in this frame. The models see the picture at
@@ -199,22 +221,25 @@ class LabEngine:
         """A photograph covering this frame, as floats — decoded once, then served from memory.
 
         Decoding a 6000px JPEG off the photo drive costs more than most mapping modes themselves;
-        a slider that redraws twenty times a second must not pay it twenty times. Export-sized
-        frames are not kept: one of them is a few hundred megabytes.
+        a slider that redraws twenty times a second must not pay it twenty times. The frames kept
+        are bounded by their bytes (FRAMES_BYTES), up to the 3072 px a release lays the picture's own
+        pixels at; export-sized frames are not kept. The memory manager can let go of all of them.
         """
         from composite import arr
+        from models import MODELS
 
         key = (str(path), int(width), int(height))
+        MODELS.used("photo frames")
         with self._arr_lock:
             if key in self._arrs:
                 self._arrs.move_to_end(key)
                 return self._arrs[key]
         got = arr(self.load_image(path, int(width), int(height)))
         got.setflags(write=False)
-        if width * height <= 1_600_000:
+        if width * height <= 7_000_000:
             with self._arr_lock:
                 self._arrs[key] = got
-                while len(self._arrs) > 96:
+                while len(self._arrs) > 1 and sum(a.nbytes for a in self._arrs.values()) > FRAMES_BYTES:
                     self._arrs.popitem(last=False)
         return got
 
@@ -297,16 +322,21 @@ class LabEngine:
         return p
 
     def vgg(self):
+        from models import MODELS
+
         with self.loading:
-            if self._vgg is None:
+            net = self._vgg
+            if net is None:
                 from torchvision.models import VGG19_Weights, vgg19
 
-                net = vgg19(weights=VGG19_Weights.IMAGENET1K_V1).features.to(self.device).eval()
-                for p in net.parameters():
-                    p.requires_grad_(False)
+                with MODELS.loading("stylize: VGG-19", lambda: setattr(self, "_vgg", None), guess=1.0):
+                    net = vgg19(weights=VGG19_Weights.IMAGENET1K_V1).features.to(self.device).eval()
+                    for p in net.parameters():
+                        p.requires_grad_(False)
                 self._vgg = net
                 print("  vgg up")
-        return self._vgg
+        MODELS.used("stylize: VGG-19")
+        return net
 
     def query(self, inputs, params, kind):
         """The registry's typed request, folded into the parse_qs shape the engine speaks."""
@@ -365,6 +395,14 @@ def warm_imports():
 
 
 def create_app(args):
+    import torch
+
+    from models import MODELS
+
+    # TensorFloat-32 for float32 matrix products and convolutions (MoGe, the stylize VGG, the VAE's
+    # float32 statistics): several times faster on this card, a precision these images never show.
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     warm_imports()
     app = FastAPI(title="Latent Lab")
     engine = LabEngine(args)
@@ -394,6 +432,25 @@ def create_app(args):
     @app.on_event("startup")
     async def startup():
         hub.attach(asyncio.get_running_loop())
+        MODELS.start()
+        # The first frame of the tokens tab and of the lab's GAN should not wait for a load: their
+        # models come up in the background while the page opens (a few gigabytes, let go when idle).
+        threading.Thread(target=warm, name="warm", daemon=True).start()
+
+    def warm():
+        try:
+            if manifest.get("rae") and (root / manifest["rae"]).is_file():
+                engine.rae(str(root / manifest["rae"]))
+            if manifest.get("gans"):
+                engine.gan_session(manifest["gans"][0]["file"])
+        except Exception as e:
+            print("  warm-up:", e, flush=True)
+
+    @app.get("/api/memory")
+    def memory():
+        """What the lab holds: each model's size and idle time, the free commit and card memory, and
+        what was let go lately (models.py)."""
+        return MODELS.report()
 
     @app.get("/api/menu")
     def menu():

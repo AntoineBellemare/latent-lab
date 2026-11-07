@@ -50,6 +50,16 @@ STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 SIZES = {768: dict(heads=12, layers=12, inner=3072), 1152: dict(heads=16, layers=28, inner=4096)}  # ViT-B, ViT-XL
 
 
+def load_mapped(path):
+    """A checkpoint read memory-mapped: its tensors are paged in from the file rather than copied into
+    the process's own memory first, so a load does not briefly commit the whole file twice (the
+    lab runs close to its commit limit). Falls back to a plain read for a file that cannot be mapped."""
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True, mmap=True)
+    except RuntimeError:
+        return torch.load(path, map_location="cpu", weights_only=True)
+
+
 class Holder(nn.Module):
     """A named slot, so the attribute paths match the checkpoint's keys."""
 
@@ -121,7 +131,7 @@ class RAE:
 
     def __init__(self, decoder, device="cuda", half=True):
         self.path = str(decoder)
-        state = torch.load(decoder, map_location="cpu", weights_only=True)
+        state = load_mapped(decoder)
         for wrap in ("model", "ema", "state_dict"):
             if isinstance(state, dict) and wrap in state and isinstance(state[wrap], dict):
                 state = state[wrap]

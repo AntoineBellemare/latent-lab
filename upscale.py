@@ -67,8 +67,18 @@ class Net(nn.Module):
         return self.conv_last(F.leaky_relu(self.conv_hr(feat), 0.2))
 
 
+def load_mapped(path):
+    """A checkpoint read memory-mapped: its tensors are paged in from the file rather than copied into
+    the process's own memory first, so a load does not briefly commit the whole file twice (the
+    lab runs close to its commit limit). Falls back to a plain read for a file that cannot be mapped."""
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True, mmap=True)
+    except RuntimeError:
+        return torch.load(path, map_location="cpu", weights_only=True)
+
+
 def load(weights, device="cuda"):
-    state = torch.load(weights, map_location="cpu", weights_only=True)
+    state = load_mapped(weights)
     net = Net()
     net.load_state_dict(state.get("params_ema", state.get("params", state)))
     net = net.eval().to(device)
@@ -79,14 +89,17 @@ def load(weights, device="cuda"):
 
 
 @torch.no_grad()
-def enlarge(net, image):
-    """[h, w, 3] floats in 0..1 to [4h, 4w, 3]."""
+def enlarge(net, image, keep=False):
+    """[h, w, 3] floats in 0..1 to [4h, 4w, 3]. `keep`: left on the card as a float tensor, for a
+    caller that finishes the picture there and copies back bytes rather than floats (a 3072 x 2048
+    float frame is 75 MB to bring back, its bytes a quarter of that)."""
     p = next(net.parameters())
     x = torch.from_numpy(np.ascontiguousarray(image.transpose(2, 0, 1)))[None].to(p.device, p.dtype)
     # A few pixels of mirror round the edge, so the border is drawn with neighbours like the rest.
     pad = 8
     big = net(F.pad(x, (pad, pad, pad, pad), mode="reflect"))[..., 4 * pad : -4 * pad, 4 * pad : -4 * pad]
-    return big.float().clamp(0, 1)[0].permute(1, 2, 0).cpu().numpy()
+    big = big.float().clamp(0, 1)[0].permute(1, 2, 0)
+    return big if keep else big.cpu().numpy()
 
 
 def main():

@@ -51,7 +51,8 @@ const STORE_V = 2;   // 2: the material zoom starts at 1, so a zoom kept from be
 // materials; a weight belongs to its material's slot and is left out while that slot is empty.
 const COMBINE = {mix: {many: true}, order: {many: true}, side: {many: true}, seam: {many: true}, contrast: {many: true},
                  weight: {slot: "texture"}, weight_b: {slot: "textureB"}, weight_c: {slot: "textureC"},
-                 operation: {}, carry: {}, push: {}};
+                 operation: {}, split_size: {}, carry: {}, push: {},
+                 look_crispness: {}, look_warmth: {}, look_exposure: {}, look_contrast: {}};
 
 let wayKey = "laid";
 const own = {};               // each way's settings: key -> {param: value}
@@ -295,7 +296,7 @@ function sync() {
     if (c && ((c.many || c.slot) && !many || (c.slot && !used[c.slot]))) continue;   // a choice among materials with one, or an empty slot's weight
     (c ? combine : knobs).appendChild(control(p, own[w.key], ph => changed(ph, ph === "settle" ? w.key : null)));
   }
-  $("combineCard").hidden = !combine.children.length;
+  $("combineCard").hidden = !combine.children.length && !param(spec(w), "encoder");
   $("tuneBox").querySelector(".sum").textContent = "· " + w.name;
   $("whereCard").hidden = !onPicture(w);
   if (onPicture(w)) where.sync();
@@ -321,8 +322,11 @@ let tileQueue = [];
 const tileOf = {};
 function refreshTiles(which) {
   // "picture": the ways on the picture; "materials": the new textures; a way's key: that one; else all
+  // A way that costs seconds and gigabytes (the generator's) is drawn only when it is the way in use
+  // or asked for by name: drawn with the others, opening the tab loaded more than this machine holds.
+  const heavy = w => spec(w).cost !== "live" && w.key !== wayKey && which !== w.key;
   const keys = WAYS.filter(w => which === "picture" || which === "materials" ? w.on === which
-    : typeof which === "string" ? w.key === which : true).map(w => w.key);
+    : typeof which === "string" ? w.key === which : true).filter(w => !heavy(w)).map(w => w.key);
   const order = [wayKey, ...keys.filter(k => k !== wayKey)].filter(k => keys.includes(k));
   for (const k of order) $("tiles").querySelector(`[data-way="${k}"]`).classList.add("waiting");
   tileQueue = [...order, ...tileQueue.filter(k => !order.includes(k))];

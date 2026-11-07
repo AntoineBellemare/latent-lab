@@ -20,6 +20,8 @@ import threading
 import numpy as np
 import torch
 
+from models import MODELS
+
 MODEL = "Ruicheng/moge-2-vitl-normal"
 SIDE = 768  # the long side the model reads a picture at
 KEEP = 32
@@ -45,8 +47,10 @@ class Geometry:
                 # .float(): a half-precision load in another thread (the body-part model's) can leak
                 # its default dtype into this one's construction, leaving the model half float16 —
                 # and every later read failing. infer() runs its own fp16 autocast.
-                self.model = MoGeModel.from_pretrained(MODEL).float().to(self.device).eval()
+                with MODELS.loading("geometry: MoGe-2", lambda: setattr(self, "model", None), self.lock, guess=1.5):
+                    self.model = MoGeModel.from_pretrained(MODEL).float().to(self.device).eval()
                 print("  geometry: MoGe-2 up")
+            MODELS.used("geometry: MoGe-2")
             image = picture()
             x = torch.from_numpy(np.asarray(image.convert("RGB"), np.float32) / 255.0).permute(2, 0, 1)
             with torch.no_grad():

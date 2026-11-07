@@ -38,6 +38,8 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
+from models import MODELS
+
 KLEIN = "black-forest-labs/FLUX.2-klein-4B"
 # Said plainly, naming the thing: "make the masked surfaces out of ..." leaves a dress as it was;
 # "replace the fabric of the dress with ..." changes it.
@@ -122,13 +124,21 @@ class Editor:
                 def _execution_device(self):
                     return device
 
-            pipe = Pipe.from_pretrained(KLEIN, torch_dtype=torch.bfloat16)
-            pipe.vae.to(self.device)
+            with MODELS.loading("editor: FLUX.2 klein", self.unload, self.lock, guess=16.0):
+                pipe = Pipe.from_pretrained(KLEIN, torch_dtype=torch.bfloat16)
+                pipe.vae.to(self.device)
             pipe.set_progress_bar_config(disable=True)
             pipe._callback_tensor_inputs = HELD
             self.pipe = pipe
             print("  editor up (FLUX.2 klein 4B)")
+        MODELS.used("editor: FLUX.2 klein")
         return self.pipe
+
+    def unload(self):
+        """The whole pipeline let go (models.py): the next edit loads it again."""
+        self.pipe = None
+        self.read.clear()
+        self.parked = True
 
     def park(self):
         """The image model off the card, for another pipeline's room; the next edit brings it back."""

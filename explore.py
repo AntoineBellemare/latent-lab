@@ -44,6 +44,8 @@ from ip_space import PRESETS, slerp
 from terms import FIELDS, term_vector
 from transform import material_vec, region_masks
 
+from loadlock import LOAD
+
 SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -559,10 +561,28 @@ def wrapped(*models):
 
 def once(load):
     """A getter whose first call loads a model, held under the engine's loading lock: a live draft
-    and a job asking at the same moment load it once, instead of twice at once and both failing."""
+    and a job asking at the same moment load it once, instead of twice at once and both failing.
+    What the first call adds to `pipes` is registered with the memory manager (models.py), so it
+    can be let go when memory runs short; the next call loads it again."""
+    name = "pipe: " + load.__name__
+
     def get(self, *args, **kwargs):
+        from models import MODELS
+
         with self.loading:
-            return load(self, *args, **kwargs)
+            owned = self.__dict__.setdefault("_owned", {}).get(name)
+            if owned and all(k in self.pipes for k in owned):
+                out = load(self, *args, **kwargs)
+            else:
+                keys = []
+                drop = lambda: [self.pipes.pop(k, None) for k in keys]  # noqa: E731
+                with MODELS.loading(name, drop, self.lock, guess=4.0):
+                    before = set(self.pipes)
+                    out = load(self, *args, **kwargs)
+                    keys += sorted(set(self.pipes) - before)
+                self._owned[name] = keys
+        MODELS.used(name)
+        return out
     get.__doc__ = load.__doc__
     return get
 
@@ -578,7 +598,7 @@ class Engine:
         self.device = torch.device(args.device)
         self.dtype = torch.float16 if self.device.type == "cuda" else torch.float32
         self.lock = threading.Lock()
-        self.loading = threading.RLock()  # first loads, one at a time (`once`)
+        self.loading = LOAD  # first loads, one at a time, with every helper's (loadlock.py)
         self.space = dict(np.load(args.space, allow_pickle=True))
         self.norm = float(self.space["norm"])
         expect = {"sd15": 1024, "sdxl": 1280, "sdxl-turbo": 1280}[args.preset]
@@ -914,11 +934,17 @@ class Engine:
         if key not in self.depths:
             from transformers import DPTForDepthEstimation, DPTImageProcessor
 
+            from models import MODELS
+
             with self.loading:
-                if "dpt" not in self.pipes:
-                    self.pipes["dpt"] = (DPTImageProcessor.from_pretrained("Intel/dpt-hybrid-midas"),
-                                         DPTForDepthEstimation.from_pretrained("Intel/dpt-hybrid-midas").to(self.device).eval())
-            proc, net = self.pipes["dpt"]
+                got = self.pipes.get("dpt")
+                if got is None:
+                    with MODELS.loading("depth: DPT", lambda: self.pipes.pop("dpt", None), self.lock, guess=1.0):
+                        got = self.pipes["dpt"] = (
+                            DPTImageProcessor.from_pretrained("Intel/dpt-hybrid-midas"),
+                            DPTForDepthEstimation.from_pretrained("Intel/dpt-hybrid-midas").to(self.device).eval())
+            MODELS.used("depth: DPT")
+            proc, net = got
             image = self.load_image(self.content_path(name), width, height)
             with torch.no_grad():
                 out = net(**proc(images=image, return_tensors="pt").to(self.device)).predicted_depth

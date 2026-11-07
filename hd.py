@@ -27,6 +27,7 @@ import torch
 from PIL import Image
 
 import composite as cx
+from loadlock import LOAD
 
 TILE = 1024
 OVERLAP = 256
@@ -69,7 +70,8 @@ class Redraw:
             from diffusers import ControlNetModel, DPMSolverMultistepScheduler, StableDiffusionXLControlNetImg2ImgPipeline
 
             base = self.transfer.load()
-            self.net = ControlNetModel.from_pretrained(TILE_NET, torch_dtype=self.transfer.dtype, use_safetensors=True)
+            with LOAD:  # loadlock.py
+                self.net = ControlNetModel.from_pretrained(TILE_NET, torch_dtype=self.transfer.dtype, use_safetensors=True)
             self.pipe = StableDiffusionXLControlNetImg2ImgPipeline(
                 vae=base.vae, text_encoder=base.text_encoder, text_encoder_2=base.text_encoder_2,
                 tokenizer=base.tokenizer, tokenizer_2=base.tokenizer_2, unet=base.unet, controlnet=self.net,

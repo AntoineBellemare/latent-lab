@@ -755,6 +755,13 @@ class Engine:
             print("  material encoder up")
         return self.pipes["clip"]
 
+    def texfile(self, name):
+        """A texture by its name under the textures folder, subfolders kept (an archive photograph sits
+        in its category's); a name that would climb out of the folder is read by its file name alone."""
+        root = pathlib.Path(self.args.textures)
+        p = root / name
+        return p if p.resolve().is_relative_to(root.resolve()) else root / pathlib.Path(name).name
+
     def file_vec(self, path):
         """Any photograph file as a material: four crops through the adapter's own encoder."""
         memo = self.__dict__.setdefault("_file_vecs", {})
@@ -947,7 +954,7 @@ class Engine:
         elif q.get("upmat", [""])[0] in self.uploads:
             v = self.upload_vec(q["upmat"][0])
         elif q.get("texfile", [""])[0]:
-            v = self.file_vec(pathlib.Path(self.args.textures) / pathlib.Path(q["texfile"][0]).name)
+            v = self.file_vec(self.texfile(q["texfile"][0]))
         elif q.get("photo", [""])[0]:
             v = self.photo_vector(int(q["photo"][0]))
         elif raw:
@@ -1133,7 +1140,7 @@ class Engine:
             if q.get("b_upmat", [""])[0] in self.uploads:
                 vectors.append(self.upload_vec(q["b_upmat"][0]))
             elif q.get("b_texfile", [""])[0]:
-                vectors.append(self.file_vec(pathlib.Path(self.args.textures) / pathlib.Path(q["b_texfile"][0]).name))
+                vectors.append(self.file_vec(self.texfile(q["b_texfile"][0])))
             elif q.get("b_photo", [""])[0]:
                 vectors.append(self.photo_vector(int(q["b_photo"][0])))
             elif q.get("b_terms", [""])[0]:

@@ -15,7 +15,7 @@ import {Vary} from "./vary.js";
 // on the picture or on the materials alone.
 const WAYS = [
   {key: "laid", method: "compose", name: "laid in", on: "picture", dial: "picture", set: {},
-   doc: "The materials laid into the picture where the mask says: each in its own region along the picture's light (or depth, or a side), all blended at every place, or each place taking the material it already resembles. The weights set how much of each, and under fine-tune each material can bring its own tokens, only its statistics, or a push along its direction. The decoder draws every seam. The dial mixes the picture's own tokens back in."},
+   doc: "The materials laid into the picture where the mask says: each in its own region along the picture's light (or depth, or a side), all blended at every place, or each place taking the material it already resembles. The weights set how much of each. In the combine card, the operation is the arithmetic that joins the picture's token and the materials' at each place (a straight mix, an arc, a sum, a difference, a product, the larger or smaller channel), and each material can bring its own tokens, only its statistics, or a push along its direction. The decoder draws every seam. The dial mixes the picture's own tokens back in."},
   {key: "rebuilt", method: "mosh", name: "rebuilt", on: "picture", dial: "hold", set: {way: "rebuild", source: "material"},
    doc: "The picture rebuilt out of the materials' tokens, each piece the closest match to the one it replaces: every token drawn out of its own neighbourhood, the materials in the picture's layout. With two or three materials all are searched at once, and the weights tip which one a piece comes from. Richly textured materials show it best. The dial holds the picture."},
   {key: "self", method: "mosh", name: "self-moshed", on: "picture", dial: "pick", set: {way: "rebuild", source: "picture"}, start: {blocks: 2, pick: 4},
@@ -47,9 +47,11 @@ const OUTPUT = new Set(["long", "enlarge", "frame", "encoder"]);
 const EDGE = [["amount", "strength"], ["mask_soft", "feather"], ["mask_noise", "ragged edge"], ["grow", "grow / shrink"],
               ["follow", "follow contours"], ["mask_scale", "feature size"]];
 const STORE_V = 2;   // 2: the material zoom starts at 1, so a zoom kept from before is let go
-// The settings shown beside the dial when two or more materials are chosen: the mix, and each
-// material's weight (named by the slot it belongs to, so an empty slot's weight is left out).
-const MIXED = {mix: null, weight: "texture", weight_b: "textureB", weight_c: "textureC"};
+// The combine card: how the tokens are put together. `many` settings matter only with two or more
+// materials; a weight belongs to its material's slot and is left out while that slot is empty.
+const COMBINE = {mix: {many: true}, order: {many: true}, side: {many: true}, seam: {many: true}, contrast: {many: true},
+                 weight: {slot: "texture"}, weight_b: {slot: "textureB"}, weight_c: {slot: "textureC"},
+                 operation: {}, carry: {}, push: {}};
 
 let wayKey = "laid";
 const own = {};               // each way's settings: key -> {param: value}
@@ -203,9 +205,6 @@ function build() {
   where = new WhereCard({root: $("where"), spec: maskSpec(), st, quick: QUICK,
                          onChange: moved => changed(moved ? "mask" : "settle", moved ? "picture" : null),
                          onArm: key => { stage.setPicking(!!key); if (key) setView("mask"); }});
-  const mixBox = el("div", "args");
-  mixBox.id = "mixBox";
-  $("dial").after(mixBox);
   for (const [key, label] of EDGE) {
     const row = slider(param(maskSpec(), key), st, {label, doc: param(maskSpec(), key).doc,
                                                     onInput: () => changed("drag"), onChange: () => changed("settle", "picture")});
@@ -284,18 +283,19 @@ function sync() {
   dial.innerHTML = "";
   const dp = param(spec(w), w.dial);
   dial.appendChild(slider(dp, own[w.key], {onInput: () => changed("drag"), onChange: () => changed("settle")}));
-  const knobs = $("knobs"), mixBox = $("mixBox");
+  const knobs = $("knobs"), combine = $("combine");
   knobs.innerHTML = "";
-  mixBox.innerHTML = "";
+  combine.innerHTML = "";
   const used = inputsFor(w);
   const many = SLOTS.filter(([k]) => used[k]).length > 1;
   for (const k of knobKeys(w)) {
     const p = param(spec(w), k);
     if (!p || !applies(p, own[w.key])) continue;
-    const slot = MIXED[k];
-    if (slot !== undefined && (!many || (slot && !used[slot]))) continue;   // a weight of a material not chosen, or the mix of one
-    (slot !== undefined ? mixBox : knobs).appendChild(control(p, own[w.key], ph => changed(ph, ph === "settle" ? w.key : null)));
+    const c = COMBINE[k];
+    if (c && ((c.many || c.slot) && !many || (c.slot && !used[c.slot]))) continue;   // a choice among materials with one, or an empty slot's weight
+    (c ? combine : knobs).appendChild(control(p, own[w.key], ph => changed(ph, ph === "settle" ? w.key : null)));
   }
+  $("combineCard").hidden = !combine.children.length;
   $("tuneBox").querySelector(".sum").textContent = "· " + w.name;
   $("whereCard").hidden = !onPicture(w);
   if (onPicture(w)) where.sync();

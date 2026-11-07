@@ -1096,7 +1096,49 @@ CARRIES = {"tokens": "the material's own tokens: its drawing replaces the pictur
                          "the grid): the picture's layout, the material's character",
            "direction": "the picture's tokens moved along the material's mean direction (its mean token minus the "
                         "picture's): the picture, pushed toward the material"}
+OPERATIONS = {"replace": "the picture's token moved toward the material's by its share: a straight mix along the chord",
+              "slerp": "along the arc between the two tokens instead of the chord: the mix keeps a token's full "
+                       "length, so halfway is as vivid as either end",
+              "add": "the material's token added to the picture's: both at once, the picture kept whole",
+              "subtract": "the material's token taken away from the picture's: the picture with less of what the "
+                          "material has",
+              "multiply": "the two tokens multiplied channel by channel: only what both carry stays strong",
+              "max": "each channel the larger of the two: whatever either carries most",
+              "min": "each channel the smaller of the two: only what both carry",
+              "difference": "each channel the distance between the two: where they disagree"}
 WEIGHTS = {"texture": "weight", "textureB": "weight_b", "textureC": "weight_c"}  # each material's weight param
+
+
+def combined(p, m, t, how):
+    """The picture's tokens `p` and a material's `m` ([tokens, 768]) combined by `how`, by `t` per
+    token ([tokens, 1], 0..1): at 0 the picture's token, at 1 the operation's whole result. Every
+    result is put back on the encoder's shell when it is decoded, as goofi's DinoDecode does, so a
+    sum or a product lands where real tokens lie."""
+    import torch
+    import torch.nn.functional as F
+
+    if how == "add":
+        return p + t * m
+    if how == "subtract":
+        return p - t * m
+    if how == "slerp":
+        a, b = F.normalize(p, dim=1), F.normalize(m, dim=1)
+        omega = torch.acos((a * b).sum(1, keepdim=True).clamp(-0.9999, 0.9999))
+        s = torch.sin(omega)
+        arc = (torch.sin((1 - t) * omega) * a + torch.sin(t * omega) * b) / s
+        return arc * ((1 - t) * p.norm(dim=1, keepdim=True) + t * m.norm(dim=1, keepdim=True))
+    if how == "multiply":
+        # About 60% of a token is the channel pattern every token of a grid shares; multiplied whole,
+        # that pattern squared swamps the rest and every token comes out alike (one flat colour). So
+        # what each token adds to its grid's shared pattern is multiplied, scaled back to the
+        # picture's own spread, and laid on the picture's shared pattern.
+        dp, dm = p - p.mean(0), m - m.mean(0)
+        prod = dp * dm
+        target = p.mean(0) + prod / (prod.std() + 1e-6) * dp.std()
+    else:
+        target = {"max": lambda: torch.maximum(p, m), "min": lambda: torch.minimum(p, m),
+                  "difference": lambda: (p - m).abs()}.get(how, lambda: m)()
+    return p + t * (target - p)
 TIP = 0.15  # how far a weight tips a rebuilt piece's choice, in cosine: half the weight costs 0.1
 _tokens, _tokens_lock = collections.OrderedDict(), threading.Lock()
 
@@ -1355,9 +1397,10 @@ def _compose_runner(files):
             if m is not None:
                 tok = tok * fr.pool(m)[None]
             share = tok.sum(0)
-            z = z_pic * column(1.0 - share, z_pic)
-            for raw, t in zip(raws, tok):
-                z = z + carried(raw, z_pic, params) * column(t, z)
+            # The materials at each place, weighted into one token, then combined with the picture's.
+            mat = sum(carried(raw, z_pic, params) * column(t, z_pic) for raw, t in zip(raws, tok))
+            mat = mat / column(np.maximum(share, 1e-6), z_pic)
+            z = combined(z_pic, mat, column(share, z_pic), params.get("operation", "replace"))
             u = float(params["picture"])
             return fr.drawn((1 - u) * z + u * z_pic, share)
 
@@ -1600,7 +1643,8 @@ def _mosh_runner(files):
             # What changed, per token: where nothing moved, the picture keeps its own pixels.
             changed = ((moved - z_pic).norm(dim=1) > 1e-3).float().cpu().numpy().reshape(fr.rows, fr.cols)
             share = share * changed * (1.0 - h)
-            z = (1 - h) * moved + h * z_pic
+            z = combined(z_pic, moved, column(np.full(fr.rows * fr.cols, 1.0 - h, np.float32), z_pic),
+                         params.get("operation", "replace"))
             s = column(np.ones_like(share) if m is None else fr.pool(m), z)
             return fr.drawn(s * z + (1 - s) * z_pic, share)
 
@@ -2039,8 +2083,8 @@ def build(preset="sd15", root=None, manifest=None):
                     I("texture", "texture", "the first material: a photograph"),
                     I("textureB", "texture", "a second material", optional=True),
                     I("textureC", "texture", "a third material", optional=True)],
-            params=[P("mix", "choice", "regions", options=list(MIXES), label="mix", group="compose", choices=MIXES,
-                      doc="with two or three materials: how they share the selection"),
+            params=[P("mix", "choice", "regions", options=list(MIXES), label="where", group="compose", choices=MIXES,
+                      doc="with two or three materials: where each one goes in the selection"),
                     P("weight", "float", 1.0, 0, 1, 0.01, label="first material", group="compose",
                       doc="the first material's weight, against the others': its share of the selection (regions "
                           "and nearest) or of every token (blend)"),
@@ -2061,6 +2105,9 @@ def build(preset="sd15", root=None, manifest=None):
                       when=[["mix", "==", "nearest"]],
                       doc="how firmly each place takes the material it resembles: 0 a mix by the weights alone, "
                           "1 its nearest material almost alone"),
+                    P("operation", "choice", "replace", options=list(OPERATIONS), label="operation", group="compose",
+                      choices=OPERATIONS, doc="the arithmetic that combines the picture's token with the materials' "
+                                              "at each place"),
                     P("carry", "choice", "tokens", options=list(CARRIES), label="carries", group="compose",
                       choices=CARRIES, doc="what each material brings into the picture's tokens"),
                     P("push", "float", 1.0, 0, 2, 0.01, label="push", group="compose",
@@ -2130,6 +2177,8 @@ def build(preset="sd15", root=None, manifest=None):
                       when=on("sort"), doc="sort along the rows or along the columns"),
                     P("hold", "float", 0.0, 0, 1, 0.01, label="hold the picture", group="mosh",
                       doc="how much of the picture's own tokens stay mixed into the mosh"),
+                    P("operation", "choice", "replace", options=list(OPERATIONS), label="operation", group="mosh",
+                      choices=OPERATIONS, doc="the arithmetic that combines the picture's token with the moved one"),
                     P("zoom", "float", 1.0, 1, 6, 0.1, label="material zoom", group="mosh",
                       when=[["source", "==", "material"]],
                       doc="how close into the material photograph: 1 the whole of it across the frame"),

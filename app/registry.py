@@ -1086,7 +1086,77 @@ COMPOSED = ("texture", "textureB", "textureC")  # the materials a composition la
 ORDERS = {"light": "the first material in the picture's darkest parts, the last in its lightest",
           "depth": "the first material on what is nearest, the last on what is furthest",
           "across": "the first material on one side of the frame, the last on the other"}
+MIXES = {"regions": "each material takes its own part of the selection, laid along the picture's light, depth or a "
+                    "side; the weights are the shares of the selection each one takes",
+         "blend": "every material at every place, mixed token by token by the weights: one surface made of all of them",
+         "nearest": "each place takes the material it already resembles (its token against each material's mean "
+                    "token); the weights are the shares of the selection each one takes"}
+CARRIES = {"tokens": "the material's own tokens: its drawing replaces the picture's",
+           "statistics": "the picture's tokens given the material's statistics (each channel's mean and spread over "
+                         "the grid): the picture's layout, the material's character",
+           "direction": "the picture's tokens moved along the material's mean direction (its mean token minus the "
+                        "picture's): the picture, pushed toward the material"}
+WEIGHTS = {"texture": "weight", "textureB": "weight_b", "textureC": "weight_c"}  # each material's weight param
+TIP = 0.15  # how far a weight tips a rebuilt piece's choice, in cosine: half the weight costs 0.1
 _tokens, _tokens_lock = collections.OrderedDict(), threading.Lock()
+
+
+def weights_of(params, slots):
+    """The chosen materials' weights, summing to 1 (equal when every weight is 0)."""
+    w = np.array([max(float(params.get(WEIGHTS[k], 1.0)), 0.0) for k in slots], np.float64)
+    return w / w.sum() if w.sum() > 0 else np.full(len(slots), 1.0 / len(slots))
+
+
+def regions(f, w, seam):
+    """One weight per material over the frame, from a ranked field in 0..1 and the materials' shares
+    `w`: material k where the field lies in its share's band, so its share of the selection is w[k].
+    Each boundary is crossfaded over `seam` times the narrower of the two shares beside it."""
+    count = len(w)
+    out = np.zeros((count,) + f.shape, np.float32)
+    if count == 1:
+        out[0] = 1
+        return out
+    edges = np.cumsum(w)[:-1]
+    s = [masks.smoothstep(np.clip((f - edges[j]) / max(seam * min(w[j], w[j + 1]), 1e-3) + 0.5, 0, 1))
+         for j in range(count - 1)]
+    for k in range(count):
+        out[k] = (s[k - 1] if k else 1.0) * (1.0 - (s[k] if k < count - 1 else 0.0))
+    return out / np.maximum(out.sum(0), 1e-6)
+
+
+def nearest(z_pic, raws, w, contrast, inside=None):
+    """Per token of the picture, a weight per material: by how much nearer the token lies to that
+    material's mean token than the other tokens of the picture do (cosine, ranked within each
+    material so no material wins only by sitting near everything). Each material then gets an offset
+    that makes its share of the selection its weight, as in `regions`: the weights say how much of
+    each, the resemblance says where. `contrast` 0 mixes by the weights everywhere, 1 gives each
+    place one material almost alone. `inside` (per token, 0..1) is the selection the shares count in."""
+    import torch
+    import torch.nn.functional as F
+
+    means = F.normalize(torch.stack([r.mean(0) for r in raws]), dim=1)
+    sim = F.normalize(z_pic, dim=1) @ means.T                      # [tokens, materials]
+    sim = 8.0 * float(contrast) * (sim - sim.mean(0)) / (sim.std(0) + 1e-6)
+    want = torch.as_tensor(w, dtype=sim.dtype, device=sim.device)
+    where = torch.ones(len(sim), 1, dtype=sim.dtype, device=sim.device) if inside is None else \
+        torch.as_tensor(np.asarray(inside, np.float32).reshape(-1, 1), device=sim.device, dtype=sim.dtype)
+    bias = torch.log(want + 1e-9)
+    for _ in range(40):  # each offset moved until the material's share of the selection is its weight
+        got = (torch.softmax(sim + bias, dim=1) * where).sum(0) / where.sum().clamp(min=1e-6)
+        bias = bias + torch.log((want + 1e-9) / (got + 1e-9))
+    return torch.softmax(sim + bias, dim=1).T.cpu().numpy()       # [materials, tokens]
+
+
+def carried(z_mat, z_pic, params):
+    """What a material brings to the picture's grid: its own tokens, the picture's tokens given its
+    statistics, or the picture's tokens pushed along its mean direction. Every result is put back on
+    the encoder's shell when it is decoded."""
+    how = params.get("carry", "tokens")
+    if how == "statistics":
+        return (z_pic - z_pic.mean(0)) / (z_pic.std(0) + 1e-6) * z_mat.std(0) + z_mat.mean(0)
+    if how == "direction":
+        return z_pic + float(params.get("push", 1.0)) * (z_mat.mean(0) - z_pic.mean(0))
+    return z_mat
 
 
 def tokens_of(key, rae, load, grid):
@@ -1260,7 +1330,8 @@ def _compose_runner(files):
     """Materials laid into a picture in DINOv2's token grid and drawn back by RAE's decoder (rae.py)."""
     def run(engine, inputs, params, watch=None):
         fr = TokenFrame(engine, inputs, params, files)
-        names = [inputs[k] for k in COMPOSED if inputs.get(k)]
+        slots = [k for k in COMPOSED if inputs.get(k)]
+        names = [inputs[k] for k in slots]
         if not names:
             raise RuntimeError("choose at least one material")
         first = lambda: fr.crop(names[0])  # noqa: E731
@@ -1268,18 +1339,25 @@ def _compose_runner(files):
         if shown is not None:
             return shown
         m = fr.mask(first)
-        f = order_of(engine, inputs, params, fr.c, None if m is None else m > 0.5) if len(names) > 1 else None
-        weights = lineup(f if f is not None else np.zeros((fr.H, fr.W), np.float32), len(names),
-                         float(params["balance"]), float(params["seam"]))
-        if m is not None:
-            weights = weights * m
-        tok = np.stack([fr.pool(w) for w in weights])
-        share = tok.sum(0)
+        w = weights_of(params, slots)
+        mix = params.get("mix", "regions") if len(names) > 1 else "blend"
         with engine.rae_lock:
             z_pic = fr.tokens()
+            raws = [fr.tokens(n) for n in names]
+            if mix == "regions":
+                f = order_of(engine, inputs, params, fr.c, None if m is None else m > 0.5)
+                tok = np.stack([fr.pool(x) for x in regions(f, w, float(params["seam"]))])
+            elif mix == "nearest":
+                inside = None if m is None else fr.pool(m)
+                tok = nearest(z_pic, raws, w, params["contrast"], inside).reshape(len(names), fr.rows, fr.cols)
+            else:
+                tok = np.repeat(w.astype(np.float32)[:, None, None], fr.rows * fr.cols, 1).reshape(len(names), fr.rows, fr.cols)
+            if m is not None:
+                tok = tok * fr.pool(m)[None]
+            share = tok.sum(0)
             z = z_pic * column(1.0 - share, z_pic)
-            for n, w in zip(names, tok):
-                z = z + fr.tokens(n) * column(w, z)
+            for raw, t in zip(raws, tok):
+                z = z + carried(raw, z_pic, params) * column(t, z)
             u = float(params["picture"])
             return fr.drawn((1 - u) * z + u * z_pic, share)
 
@@ -1316,10 +1394,11 @@ def laid(blocks, ny, nx, R, C):
     return blocks.reshape(ny, nx, D, b, b).permute(2, 0, 3, 1, 4).reshape(D, ny * b, nx * b)[:, :R, :C].permute(1, 2, 0)
 
 
-def rebuilt(target, source, b, pick, same, gen):
+def rebuilt(target, source, b, pick, same, gen, bias=None):
     """Each b x b block of the target grid ([rows, cols, 768]) replaced by the source's block, from
     anywhere in it, whose tokens are closest (cosine, token by token); with `pick` above 1, by one of
-    that many closest, at random. `same`: the source is the target, so a block never takes itself."""
+    that many closest, at random. `same`: the source is the target, so a block never takes itself.
+    `bias(rows, cols)`, when given, is added to each source block's closeness, by where it starts."""
     import torch
     import torch.nn.functional as F
 
@@ -1332,6 +1411,8 @@ def rebuilt(target, source, b, pick, same, gen):
         cy, cx_ = torch.meshgrid(torch.arange(sy), torch.arange(sx), indexing="ij")
         near = ((ty.reshape(-1, 1) - cy.reshape(1, -1)).abs() < b) & ((tx.reshape(-1, 1) - cx_.reshape(1, -1)).abs() < b)
         sim = sim.masked_fill(near.to(sim.device), -9.0)
+    if bias is not None:
+        sim = sim + bias(sy, sx).to(sim.device, sim.dtype)[None]
     k = max(1, min(int(pick), sim.shape[1]))
     top = sim.topk(k, dim=1).indices
     choice = torch.randint(0, k, (len(top),), generator=gen).to(top.device)
@@ -1479,6 +1560,7 @@ def _mosh_runner(files):
 
         fr = TokenFrame(engine, inputs, params, files)
         material = params["source"] == "material" and inputs.get("texture")
+        slots = [k for k in COMPOSED if inputs.get(k)] if material and params["way"] == "rebuild" else ["texture"]
         source_image = (lambda: fr.crop(inputs["texture"])) if material else (lambda: fr.c)  # noqa: E731
         shown = fr.shown_mask(source_image)
         if shown is not None:
@@ -1492,7 +1574,14 @@ def _mosh_runner(files):
             src = fr.tokens(inputs["texture"]) if material else z_pic
             grid = lambda z: z.reshape(fr.rows, fr.cols, -1)  # noqa: E731
             way = params["way"]
-            if way == "rebuild":
+            if way == "rebuild" and material and len(slots) > 1:
+                # Every material searched at once, side by side; a weight tips which one a piece comes from.
+                w = weights_of(params, slots)
+                tip = torch.as_tensor([TIP * np.log(x / w.max()) if x > 0 else -9.0 for x in w], dtype=torch.float32)
+                wide = torch.cat([grid(fr.tokens(inputs[k])) for k in slots], 1)
+                owner = lambda sy, sx: tip[(torch.arange(sx) // fr.cols).clamp(max=len(slots) - 1)].repeat(sy)  # noqa: E731
+                moved = rebuilt(grid(z_pic), wide, int(params["blocks"]), params["pick"], False, gen, owner)
+            elif way == "rebuild":
                 moved = rebuilt(grid(z_pic), grid(src), int(params["blocks"]), params["pick"], not material, gen)
             elif way == "drag":
                 by = params["by"]
@@ -1950,21 +2039,37 @@ def build(preset="sd15", root=None, manifest=None):
                     I("texture", "texture", "the first material: a photograph"),
                     I("textureB", "texture", "a second material", optional=True),
                     I("textureC", "texture", "a third material", optional=True)],
-            params=[P("order", "choice", "light", options=list(ORDERS), label="order", group="compose", choices=ORDERS,
-                      doc="with two or three materials: what decides which one goes where"),
+            params=[P("mix", "choice", "regions", options=list(MIXES), label="mix", group="compose", choices=MIXES,
+                      doc="with two or three materials: how they share the selection"),
+                    P("weight", "float", 1.0, 0, 1, 0.01, label="first material", group="compose",
+                      doc="the first material's weight, against the others': its share of the selection (regions "
+                          "and nearest) or of every token (blend)"),
+                    P("weight_b", "float", 1.0, 0, 1, 0.01, label="second material", group="compose",
+                      doc="the second material's weight, when there is a second"),
+                    P("weight_c", "float", 1.0, 0, 1, 0.01, label="third material", group="compose",
+                      doc="the third material's weight, when there is a third"),
+                    P("order", "choice", "light", options=list(ORDERS), label="order", group="compose", choices=ORDERS,
+                      when=[["mix", "==", "regions"]], doc="what decides which material goes where"),
                     P("side", "angle", 0.0, 0, 6.283, 0.05, label="side", group="compose",
-                      when=[["order", "==", "across"]],
+                      when=[["mix", "==", "regions"], ["order", "==", "across"]],
                       doc="which side the first material comes from: 0 the top, then round clockwise"),
-                    P("balance", "float", 0.5, 0, 1, 0.01, label="balance", group="compose",
-                      doc="moves the boundaries between the materials: lower gives the first more of the frame, "
-                          "higher the last; slide it to let one grow into the other"),
                     P("seam", "float", 0.35, 0, 1, 0.01, label="seam width", group="compose",
+                      when=[["mix", "==", "regions"]],
                       doc="how gradually one material passes into the next: 0 a clean line (the decoder still "
-                          "draws it), 1 one long morph across the frame"),
+                          "draws it), 1 a morph across the narrower of the two"),
+                    P("contrast", "float", 0.6, 0, 1, 0.01, label="contrast", group="compose",
+                      when=[["mix", "==", "nearest"]],
+                      doc="how firmly each place takes the material it resembles: 0 a mix by the weights alone, "
+                          "1 its nearest material almost alone"),
+                    P("carry", "choice", "tokens", options=list(CARRIES), label="carries", group="compose",
+                      choices=CARRIES, doc="what each material brings into the picture's tokens"),
+                    P("push", "float", 1.0, 0, 2, 0.01, label="push", group="compose",
+                      when=[["carry", "==", "direction"]],
+                      doc="how far along the material's direction: 1 the material's mean, above 1 past it"),
                     P("picture", "float", 0.0, 0, 1, 0.01, label="picture underneath", group="compose",
                       doc="how much of the picture's own tokens stay under the materials: slide it to morph from "
                           "the composition back to the picture"),
-                    P("zoom", "float", 2.0, 1, 6, 0.1, label="material zoom", group="compose",
+                    P("zoom", "float", 1.0, 1, 6, 0.1, label="material zoom", group="compose",
                       doc="how close into each material photograph: 1 the whole photograph across the frame, 3 a "
                           "third of it (the GANs' crop); larger is coarser grain"),
                     P("seed", "seed", 0, label="crop", group="compose",
@@ -1987,7 +2092,11 @@ def build(preset="sd15", root=None, manifest=None):
                 "matches, dragged, or sorted) and drawn back by a decoder that draws each one as if it belonged",
             inputs=[I("content", "content", "the picture to mosh"),
                     I("texture", "texture", "the material photograph whose tokens are moved in", optional=True,
-                      when=[["source", "==", "material"]])],
+                      when=[["source", "==", "material"]]),
+                    I("textureB", "texture", "a second material, searched beside the first", optional=True,
+                      when=[["source", "==", "material"], ["way", "==", "rebuild"]]),
+                    I("textureC", "texture", "a third material, searched beside the others", optional=True,
+                      when=[["source", "==", "material"], ["way", "==", "rebuild"]])],
             params=[P("way", "choice", "rebuild", options=list(MOSHES), label="way", group="mosh", choices=MOSHES,
                       doc="how the tokens are moved"),
                     P("source", "choice", "material", options=["material", "picture"], label="tokens from",
@@ -2000,6 +2109,12 @@ def build(preset="sd15", root=None, manifest=None):
                       doc="how many tokens across each piece that is moved"),
                     P("pick", "int", 1, 1, 12, 1, label="wildness", group="mosh", when=on("rebuild"),
                       doc="choose among this many closest matches at random: 1 always the closest"),
+                    *[P(key, "float", 1.0, 0, 1, 0.01, label=label, group="mosh",
+                        when=[["way", "==", "rebuild"], ["source", "==", "material"]],
+                        doc=f"the {label}'s weight against the others': a lower weight makes its pieces win only "
+                            "where they match clearly better, 0 leaves it out")
+                      for key, label in (("weight", "first material"), ("weight_b", "second material"),
+                                         ("weight_c", "third material"))],
                     P("by", "choice", "light", options=["light", "depth", "noise"], label="pulled by", group="mosh",
                       when=on("drag"), choices={"light": "the brightest places pulled furthest",
                                                 "depth": "the nearest places pulled furthest",
@@ -2015,7 +2130,7 @@ def build(preset="sd15", root=None, manifest=None):
                       when=on("sort"), doc="sort along the rows or along the columns"),
                     P("hold", "float", 0.0, 0, 1, 0.01, label="hold the picture", group="mosh",
                       doc="how much of the picture's own tokens stay mixed into the mosh"),
-                    P("zoom", "float", 2.0, 1, 6, 0.1, label="material zoom", group="mosh",
+                    P("zoom", "float", 1.0, 1, 6, 0.1, label="material zoom", group="mosh",
                       when=[["source", "==", "material"]],
                       doc="how close into the material photograph: 1 the whole of it across the frame"),
                     P("seed", "seed", 0, label="seed", group="mosh",
@@ -2053,7 +2168,7 @@ def build(preset="sd15", root=None, manifest=None):
                       when=way("remix"), doc="how far a piece may travel: 0 the material as it is, more scatters it wider"),
                     P("hold", "float", 0.0, 0, 1, 0.01, label="hold the first", group="hybrid", when=way("layout", "remix"),
                       doc="how much of the first material's own tokens stay mixed in"),
-                    P("zoom", "float", 2.0, 1, 6, 0.1, label="material zoom", group="hybrid",
+                    P("zoom", "float", 1.0, 1, 6, 0.1, label="material zoom", group="hybrid",
                       doc="how close into each material photograph: 1 the whole of it across the frame"),
                     P("seed", "seed", 0, label="seed", group="hybrid",
                       doc="another number: another pattern, other random choices, other pieces of the materials"),

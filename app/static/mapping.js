@@ -159,7 +159,7 @@ function pickMode(k) {
 // change to where the mask goes the mask itself too.
 function changed(phase, tilesToo) {
   shown = null;
-  sync();
+  if (phase !== "drag") sync();  // sync rebuilds the panel: mid-drag it would replace the slider being dragged
   save();
   draw(phase === "drag" ? "drag" : "settle");
   if (phase === "mask") setView("mask");

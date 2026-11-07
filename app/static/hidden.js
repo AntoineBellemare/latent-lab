@@ -229,7 +229,7 @@ function setSquint(on) {
 // full one; `tilesToo` redraws the tiles it names ("instant", "drawn", a way's key, or all).
 function changed(phase, tilesToo) {
   shown = null;
-  sync();
+  if (phase !== "drag") sync();  // sync rebuilds the panel: mid-drag it would replace the slider being dragged
   save();
   draw(phase === "drag" ? "drag" : "settle");
   if (stage.view !== "result" && phase !== "drag") setView(stage.view === "hint" && wayKey === "illusion" ? "hint" : "result");

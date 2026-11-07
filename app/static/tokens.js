@@ -15,9 +15,9 @@ import {Vary} from "./vary.js";
 // on the picture or on the materials alone.
 const WAYS = [
   {key: "laid", method: "compose", name: "laid in", on: "picture", dial: "picture", set: {},
-   doc: "The materials laid into the picture where the mask says, in the order its light (or depth, or a side) gives them; the decoder draws every seam. The dial mixes the picture's own tokens back in."},
+   doc: "The materials laid into the picture where the mask says: each in its own region along the picture's light (or depth, or a side), all blended at every place, or each place taking the material it already resembles. The weights set how much of each, and under fine-tune each material can bring its own tokens, only its statistics, or a push along its direction. The decoder draws every seam. The dial mixes the picture's own tokens back in."},
   {key: "rebuilt", method: "mosh", name: "rebuilt", on: "picture", dial: "hold", set: {way: "rebuild", source: "material"},
-   doc: "The picture rebuilt out of the first material's tokens, each the closest match to the one it replaces: every token drawn out of its own neighbourhood, a checkerboard of the material in the picture's layout. Richly textured materials show it best. The dial holds the picture."},
+   doc: "The picture rebuilt out of the materials' tokens, each piece the closest match to the one it replaces: every token drawn out of its own neighbourhood, the materials in the picture's layout. With two or three materials all are searched at once, and the weights tip which one a piece comes from. Richly textured materials show it best. The dial holds the picture."},
   {key: "self", method: "mosh", name: "self-moshed", on: "picture", dial: "pick", set: {way: "rebuild", source: "picture"}, start: {blocks: 2, pick: 4},
    doc: "The picture rebuilt out of its own tokens, every piece swapped for a look-alike from elsewhere in it: a face grows extra eyes, a dog more heads. The dial chooses among more look-alikes at random."},
   {key: "smeared", method: "mosh", name: "smeared", on: "picture", dial: "length", set: {way: "drag", source: "picture"}, start: {by: "noise", side: Math.PI, length: 10},
@@ -43,6 +43,13 @@ const QUICK = [["none", "whole picture"], ["subject", "main subject"], ["person"
 const SIZES = [512, 768, 1024];
 const FRAMES = ["3:2", "1:1", "2:3"];
 const OUTPUT = new Set(["long", "enlarge", "frame", "encoder"]);
+// The mask's edge: shared by every way that works on the picture.
+const EDGE = [["amount", "strength"], ["mask_soft", "feather"], ["mask_noise", "ragged edge"], ["grow", "grow / shrink"],
+              ["follow", "follow contours"], ["mask_scale", "feature size"]];
+const STORE_V = 2;   // 2: the material zoom starts at 1, so a zoom kept from before is let go
+// The settings shown beside the dial when two or more materials are chosen: the mix, and each
+// material's weight (named by the slot it belongs to, so an empty slot's weight is left out).
+const MIXED = {mix: null, weight: "texture", weight_b: "textureB", weight_c: "textureC"};
 
 let wayKey = "laid";
 const own = {};               // each way's settings: key -> {param: value}
@@ -68,6 +75,7 @@ function params(w = way()) {
 function inputsFor(w = way()) {
   const mats = Object.fromEntries(SLOTS.map(([k]) => [k, inputs[k]]).filter(([, v]) => v));
   if (w.method === "hybrid" || w.method === "draw") return mats;
+  if (w.key === "rebuilt") return {content: inputs.content, ...mats};   // rebuilt searches every material
   if (w.method === "mosh") return {content: inputs.content, texture: inputs.texture};
   return {content: inputs.content, ...mats};
 }
@@ -90,6 +98,7 @@ menu().then(m => {
   inputs.texture = m.textures.find(t => t.includes("DSC00587")) || m.textures[0];
   inputs.textureB = m.textures.find(t => t.includes("DSC06819")) || "";
   const got = stored("tokens");
+  if (got && (got.v || 1) < STORE_V) for (const k in got.own || {}) delete got.own[k].zoom;
   if (got) {
     for (const k in got.own || {}) if (own[k]) Object.assign(own[k], got.own[k], way(k).set);
     for (const k in got.st || {}) if (k in st) st[k] = got.st[k];
@@ -106,7 +115,7 @@ menu().then(m => {
   else { sync(); draw("settle"); refreshTiles(); }
 });
 
-const save = () => store("tokens", {own, st, way: wayKey, inputs});
+const save = () => store("tokens", {v: STORE_V, own, st, way: wayKey, inputs});
 
 // ---------- the controls ----------
 function views() {
@@ -194,6 +203,17 @@ function build() {
   where = new WhereCard({root: $("where"), spec: maskSpec(), st, quick: QUICK,
                          onChange: moved => changed(moved ? "mask" : "settle", moved ? "picture" : null),
                          onArm: key => { stage.setPicking(!!key); if (key) setView("mask"); }});
+  const mixBox = el("div", "args");
+  mixBox.id = "mixBox";
+  $("dial").after(mixBox);
+  for (const [key, label] of EDGE) {
+    const row = slider(param(maskSpec(), key), st, {label, doc: param(maskSpec(), key).doc,
+                                                    onInput: () => changed("drag"), onChange: () => changed("settle", "picture")});
+    row.dataset.edge = key;
+    $("edge").appendChild(row);
+  }
+  $("edge").appendChild(tick("invert", st.invert, v => { st.invert = v; changed("mask", "picture"); }, param(maskSpec(), "invert").doc));
+  $("edge").appendChild(control(param(maskSpec(), "mask_seed"), st, ph => changed(ph, ph === "settle" ? "picture" : null)));
   for (const s of SIZES) {
     const b = el("button", "", String(s));
     b.dataset.size = s;
@@ -242,7 +262,7 @@ function pickWay(k) {
 // a change to the mask the mask itself too; `tilesToo` redraws the tiles it names.
 function changed(phase, tilesToo) {
   shown = null;
-  sync();
+  if (phase !== "drag") sync();  // sync rebuilds the panel: mid-drag it would replace the slider being dragged
   save();
   draw(phase === "drag" ? "drag" : "settle");
   if (phase === "mask") setView("mask");
@@ -264,15 +284,23 @@ function sync() {
   dial.innerHTML = "";
   const dp = param(spec(w), w.dial);
   dial.appendChild(slider(dp, own[w.key], {onInput: () => changed("drag"), onChange: () => changed("settle")}));
-  const knobs = $("knobs");
+  const knobs = $("knobs"), mixBox = $("mixBox");
   knobs.innerHTML = "";
+  mixBox.innerHTML = "";
+  const used = inputsFor(w);
+  const many = SLOTS.filter(([k]) => used[k]).length > 1;
   for (const k of knobKeys(w)) {
     const p = param(spec(w), k);
-    if (p && applies(p, own[w.key])) knobs.appendChild(control(p, own[w.key], ph => changed(ph, ph === "settle" ? w.key : null)));
+    if (!p || !applies(p, own[w.key])) continue;
+    const slot = MIXED[k];
+    if (slot !== undefined && (!many || (slot && !used[slot]))) continue;   // a weight of a material not chosen, or the mix of one
+    (slot !== undefined ? mixBox : knobs).appendChild(control(p, own[w.key], ph => changed(ph, ph === "settle" ? w.key : null)));
   }
   $("tuneBox").querySelector(".sum").textContent = "· " + w.name;
   $("whereCard").hidden = !onPicture(w);
   if (onPicture(w)) where.sync();
+  $("edgeCard").hidden = !onPicture(w) || st.mask === "none";
+  $("edge").querySelectorAll("[data-edge]").forEach(r => r._set(st[r.dataset.edge]));
   $("frameRow").hidden = !["hybrid", "draw"].includes(w.method);
   $("encoderRow").hidden = !param(spec(w), "encoder");
   $("encoderSeg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.encoder === st.encoder));

@@ -113,7 +113,16 @@ class Editor:
         if self.pipe is None:
             from diffusers import Flux2KleinInpaintPipeline
 
-            pipe = Flux2KleinInpaintPipeline.from_pretrained(KLEIN, torch_dtype=torch.bfloat16)
+            device = self.device
+
+            class Pipe(Flux2KleinInpaintPipeline):
+                # diffusers takes the device of the first component by name, the text encoder, which
+                # stays in RAM here; the pictures must go where the VAE and the image model run.
+                @property
+                def _execution_device(self):
+                    return device
+
+            pipe = Pipe.from_pretrained(KLEIN, torch_dtype=torch.bfloat16)
             pipe.vae.to(self.device)
             pipe.set_progress_bar_config(disable=True)
             pipe._callback_tensor_inputs = HELD
